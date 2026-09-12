@@ -7,6 +7,13 @@ JUAN (**Job Utility And Network-runner**) es un proyecto desarrollado para la ma
 El proyecto tiene como objetivo desarrollar un sistema para **recibir, administrar, ejecutar y monitorear trabajos**, permitiendo su operación local y mediante una red privada.
 
 Actualmente, el proyecto se encuentra en una **etapa inicial de desarrollo**. La implementación, documentación, pruebas y demás componentes del proyecto se irán agregando conforme avance el desarrollo.
+---
+
+## Integrantes
+**lista:**
+-Adrián Arturo García López
+-Nicolás Tadeo Cáceres Pánuco
+-lara Romero Ramiro
 
 ---
 
