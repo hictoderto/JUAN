@@ -10,10 +10,10 @@ Actualmente, el proyecto se encuentra en una **etapa inicial de desarrollo**. La
 ---
 
 ## Integrantes
-**lista:**
--Adrián Arturo García López
--Nicolás Tadeo Cáceres Pánuco
--lara Romero Ramiro
+**lista:**.
+-Adrián Arturo García López.
+-Nicolás Tadeo Cáceres Pánuco.
+-Lara Romero Ramiro.
 
 ---
 
