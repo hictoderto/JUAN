@@ -1,14 +1,17 @@
 cmake_minimum_required(VERSION 3.15)
-project(JUAN CXX)
+project(JUAN C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_subdirectory(deps)
 
 if(NOT DEFINED BUILD_TESTS)
 	if (CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
 		set(BUILD_TESTS TRUE)
 	endif()
 endif()
+
 
 if(BUILD_TESTS)
 
@@ -25,11 +28,13 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 include(GoogleTest)
 
-add_executable(JuanTests tests/juan_tests.cpp)
+add_executable(JuanTests src/tests/juan_tests.cpp)
 target_link_libraries(JuanTests GTest::gtest_main)
 target_compile_options(JuanTests PUBLIC -Wall -Wextra -pedantic)
 
 endif()
 
-add_executable(juan main.cpp)
+
+add_executable(juan src/main.cpp)
+target_link_libraries(juan PUBLIC sqlite3)
 
