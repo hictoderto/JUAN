@@ -36,5 +36,6 @@ endif()
 
 
 add_executable(juan src/main.cpp)
-target_link_libraries(juan PUBLIC sqlite3)
+target_link_libraries(juan PRIVATE sqlite3)
+target_include_directories(juan PRIVATE inc)
 
