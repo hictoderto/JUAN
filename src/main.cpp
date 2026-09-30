@@ -1,3 +1,5 @@
+#include "database.h"
+#include "result.h"
 #include <fcntl.h>
 #include <iostream>
 #include <string>
@@ -5,7 +7,8 @@
 #include <unistd.h>
 #include <vector>
 
-#include <sqlite3.h>
+#include <logger.h>
+
 
 using namespace std;
 
@@ -47,10 +50,47 @@ void actualizarJobs() {
 }
 
 int main() {
+	using namespace juan;
+	auto logger_res = Logger::open("juan_log", LogLevel::ERROR);
 
-	sqlite3* db;
+	logger_res->error("Test error");
+	logger_res->warn("Test warn");
+	logger_res->info("Test info");
+	logger_res->debug("Test debug");
 
-	sqlite3_open("data.db", &db);
+	auto init_res = init_db("data.db");
+	
+	if(!init_res) {
+		cerr << status_str(init_res.error()) << endl;
+		return -1;
+	}
+
+
+	//sqlite3_open("data.db", &db);
+
+	//sqlite3_stmt* stmt;
+	//sqlite3_prepare_v2(db, "CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, command TEXT NOT NULL, status INTEGER NOT NULL, queued_at INTEGER, launched_at INTEGER, finished_at INTEGER, result INTEGER ) STRICT", -1, &stmt, nullptr);
+	//sqlite3_step(stmt);
+	//sqlite3_finalize(stmt);
+
+	//sqlite3_stmt* insert_job_stmt;
+	//sqlite3_prepare_v2(db, "INSERT INTO jobs (id) VALUES (NULL) RETURNING id", -1, &insert_job_stmt, nullptr);
+
+	auto get_id = [&]() {
+		//auto ret = sqlite3_step(insert_job_stmt);
+		//int64_t id = -1L;
+		//if (ret == SQLITE_ROW) {
+			//id = sqlite3_column_int64(insert_job_stmt, 0);
+		//}
+		//ret = sqlite3_step(insert_job_stmt);
+		//if (ret == SQLITE_DONE) {
+			//sqlite3_reset(insert_job_stmt);
+			//return id;
+		//}
+		return -1L;		
+	};
+
+
 
 	cout << "JUAN iniciado. PID: " << getpid() << endl;
 
@@ -171,6 +211,7 @@ int main() {
 
 			cout << "Job creado." << endl;
 			cout << "PID: " << child << endl;
+			cout << "job id: " << get_id() << endl;
 			cout << "Jobs activos: " << jobs.size() << "/" << MAX_JOBS << endl;
 
 			// IMPORTANTE:

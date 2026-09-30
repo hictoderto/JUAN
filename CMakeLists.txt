@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 project(JUAN C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_subdirectory(deps)
@@ -35,7 +35,8 @@ target_compile_options(JuanTests PUBLIC -Wall -Wextra -pedantic)
 endif()
 
 
-add_executable(juan src/main.cpp)
+add_executable(juan src/main.cpp src/database.cpp src/result.cpp src/logger.cpp)
+target_compile_options(juan PUBLIC -Wall -Wextra -pedantic)
 target_link_libraries(juan PRIVATE sqlite3)
 target_include_directories(juan PRIVATE inc)
 
