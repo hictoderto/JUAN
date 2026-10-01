@@ -48,17 +48,26 @@ void actualizarJobs() {
 		}
 	}
 }
+#include <sqlite3.h>
 
 int main() {
 	using namespace juan;
-	auto logger_res = Logger::open("juan_log", LogLevel::ERROR);
 
-	logger_res->error("Test error");
-	logger_res->warn("Test warn");
-	logger_res->info("Test info");
-	logger_res->debug("Test debug");
+	auto logger_res = OFSOutput::open("juan_log");
+	if(!logger_res) {
+		std::cout << "Failed to open log file" << std::endl;
+	}
 
-	auto init_res = init_db("data.db");
+	Logger logger = logger_res ? Logger{*std::move(logger_res), LogLevel::INFO} : Logger{VoidOutput{}, LogLevel::ERROR};
+
+
+	logger.error("Test error");
+	logger.warn("Test warn");
+	logger.info("Test info");
+	logger.debug("Test debug");
+
+
+	auto init_res = DB::connect("data.db", logger);
 	
 	if(!init_res) {
 		cerr << status_str(init_res.error()) << endl;
@@ -68,25 +77,40 @@ int main() {
 
 	//sqlite3_open("data.db", &db);
 
-	//sqlite3_stmt* stmt;
-	//sqlite3_prepare_v2(db, "CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, command TEXT NOT NULL, status INTEGER NOT NULL, queued_at INTEGER, launched_at INTEGER, finished_at INTEGER, result INTEGER ) STRICT", -1, &stmt, nullptr);
-	//sqlite3_step(stmt);
-	//sqlite3_finalize(stmt);
+	sqlite3_stmt* stmt;
+	sqlite3_prepare_v2(init_res->db, "CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, command TEXT NOT NULL, status INTEGER NOT NULL, queued_at INTEGER, launched_at INTEGER, finished_at INTEGER, result INTEGER ) STRICT", -1, &stmt, nullptr);
+	sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
 
-	//sqlite3_stmt* insert_job_stmt;
-	//sqlite3_prepare_v2(db, "INSERT INTO jobs (id) VALUES (NULL) RETURNING id", -1, &insert_job_stmt, nullptr);
+	sqlite3_stmt* insert_job_stmt;
+	sqlite3_prepare_v2(init_res->db, "INSERT INTO jobs (id,command,status) VALUES (NULL,:cmd ,:st) RETURNING id", -1, &insert_job_stmt, nullptr);
+	auto cmd_idx = sqlite3_bind_parameter_index(insert_job_stmt, ":cmd");
+	auto st_idx = sqlite3_bind_parameter_index(insert_job_stmt, ":st");
 
-	auto get_id = [&]() {
-		//auto ret = sqlite3_step(insert_job_stmt);
-		//int64_t id = -1L;
-		//if (ret == SQLITE_ROW) {
-			//id = sqlite3_column_int64(insert_job_stmt, 0);
-		//}
-		//ret = sqlite3_step(insert_job_stmt);
-		//if (ret == SQLITE_DONE) {
-			//sqlite3_reset(insert_job_stmt);
-			//return id;
-		//}
+	logger.info("cmd_idx {}, st_idx {}", cmd_idx, st_idx );
+
+	auto get_id = [&](const string& cmd) {
+		int bind_res;
+		bind_res = sqlite3_bind_text64(insert_job_stmt, cmd_idx, cmd.c_str(), cmd.length(), SQLITE_TRANSIENT, SQLITE_UTF8_ZT);
+		if(bind_res != SQLITE_OK) {
+			logger.error("error binding cmd {}", sqlite3_errmsg(init_res->db));
+		}
+		bind_res = sqlite3_bind_int64(insert_job_stmt, st_idx, 1);
+		if(bind_res != SQLITE_OK) {
+			logger.error("error binding st {}", sqlite3_errmsg(init_res->db));
+		}
+		auto ret = sqlite3_step(insert_job_stmt);
+		int64_t id = -1L;
+		if (ret == SQLITE_ROW) {
+			id = sqlite3_column_int64(insert_job_stmt, 0);
+		} else {
+			logger.error("error inserting {}", sqlite3_errmsg(init_res->db));
+		}
+		ret = sqlite3_step(insert_job_stmt);
+		if (ret == SQLITE_DONE) {
+			sqlite3_reset(insert_job_stmt);
+			return id;
+		}
 		return -1L;		
 	};
 
@@ -98,6 +122,7 @@ int main() {
 
 	cout << "JUAN> " << flush;
 	while (getline(cin, linea)) {
+		logger.info("Got commandline: \"{}\"", linea);
 		// Revisar procesos terminados
 		actualizarJobs();
 
@@ -211,7 +236,7 @@ int main() {
 
 			cout << "Job creado." << endl;
 			cout << "PID: " << child << endl;
-			cout << "job id: " << get_id() << endl;
+			cout << "job id: " << get_id(comando) << endl;
 			cout << "Jobs activos: " << jobs.size() << "/" << MAX_JOBS << endl;
 
 			// IMPORTANTE:

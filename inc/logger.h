@@ -1,12 +1,13 @@
 #ifndef JUAN_LOGGER_H
 #define JUAN_LOGGER_H
-
-#include "passkey.h"
 #include <format>
 #include <fstream>
 #include <iterator>
-#include <result.h>
-#include <types.h>
+#include <variant>
+
+#include "passkey.h"
+#include "result.h"
+#include "types.h"
 
 namespace juan {
 using ofs = std::ofstream;
@@ -39,31 +40,65 @@ constexpr std::string_view log_level_str(LogLevel level) noexcept {
 	return "[UNKNOWN]"sv;
 }
 
-class Logger {
+class OFSOutput {
 	ofs output_file;
+
+  public:
+	OFSOutput(ofs&& output_file, passkey<OFSOutput>) noexcept;
+
+	OFSOutput(const OFSOutput&) = delete;
+	OFSOutput(OFSOutput&&) noexcept;
+	OFSOutput& operator=(const OFSOutput&) = delete;
+	OFSOutput& operator=(OFSOutput&&) noexcept;
+	~OFSOutput();
+
+	template <typename... Args>
+	void format_to(std::format_string<Args...> fmt, Args&&... args) {
+		std::ostreambuf_iterator out_it(output_file);
+		std::format_to(out_it, fmt, std::forward<Args>(args)...);
+	}
+	void flush();
+	static Result<OFSOutput> open(const path& file) noexcept;
+};
+
+class VoidOutput {
+  public:
+	template <typename... Args>
+	void format_to(std::format_string<Args...>, Args&&...) {
+	}
+	void flush();
+};
+
+using OutputVariant = std::variant<VoidOutput, OFSOutput>;
+
+class Logger {
+	OutputVariant output;
 	LogLevel level;
 
   public:
-	Logger(ofs&& output_file, LogLevel level, passkey<Logger>) noexcept;
+	Logger(VoidOutput&& logger, LogLevel level);
+	Logger(OFSOutput&& logger, LogLevel level);
+	template <typename... Args>
+	void format_to(std::format_string<Args...> fmt, Args&&... args) {
+		std::visit(
+		    [fmt, &args...](auto& output) {
+			    output.format_to(fmt, std::forward<Args>(args)...);
+		    },
+		    output);
+	}
 
-	Logger(const Logger&) = delete;
-	Logger(Logger&&) noexcept;
-	Logger& operator=(const Logger&) = delete;
-	Logger& operator=(Logger&&) noexcept;
-	~Logger();
+	void flush();
 
 	template <LogLevel lvl, typename... Args>
 	void log(std::format_string<Args...> fmt, Args&&... args) {
-		using std::format_to;
 		if constexpr (lvl <= max_log_level) {
 			if (lvl <= level) {
-				std::ostreambuf_iterator out_it(output_file);
-				format_to(out_it, log_level_str(lvl));
-				format_to(out_it, ": ");
-				format_to(out_it, fmt, std::forward<Args>(args)...);
-				format_to(out_it, "\n");
+				format_to(log_level_str(lvl));
+				format_to(": ");
+				format_to(fmt, std::forward<Args>(args)...);
+				format_to("\n");
 				if constexpr (lvl <= max_flush_level) {
-					output_file.flush();
+					flush();
 				}
 			}
 		}
@@ -85,8 +120,6 @@ class Logger {
 	void debug(std::format_string<Args...> fmt, Args&&... args) {
 		log<LogLevel::DEBUG>(fmt, std::forward<Args>(args)...);
 	}
-
-	static Result<Logger> open(const path& file, LogLevel level) noexcept;
 };
 
 } // namespace juan

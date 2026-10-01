@@ -10,15 +10,19 @@
 #include <utility>
 
 namespace juan {
-Logger::Logger(ofs&& output_file, LogLevel level, passkey<Logger>) noexcept
-    : output_file(std::move(output_file)), level{level} {
+OFSOutput::OFSOutput(ofs&& output_file, passkey<OFSOutput>) noexcept
+    : output_file(std::move(output_file)) {
 }
 
-Logger::Logger(Logger&&) noexcept            = default;
-Logger& Logger::operator=(Logger&&) noexcept = default;
-Logger::~Logger()                            = default;
+OFSOutput::OFSOutput(OFSOutput&&) noexcept            = default;
+OFSOutput& OFSOutput::operator=(OFSOutput&&) noexcept = default;
+OFSOutput::~OFSOutput()                               = default;
 
-Result<Logger> Logger::open(const path& file, LogLevel level) noexcept {
+void OFSOutput::flush() {
+	output_file.flush();
+}
+
+Result<OFSOutput> OFSOutput::open(const path& file) noexcept {
 	using namespace std::filesystem;
 	using std::error_code;
 	using std::unexpected;
@@ -34,10 +38,24 @@ Result<Logger> Logger::open(const path& file, LogLevel level) noexcept {
 		if (!stream)
 			return unexpected{Status::OPEN_LOG_ERROR};
 
-		return Result<Logger>{std::in_place, std::move(stream), level,
-		                      passkey<Logger>{}};
+		return Result<OFSOutput>{std::in_place, std::move(stream),
+		                         passkey<OFSOutput>{}};
 	} catch (...) {
 		return unexpected{Status::OPEN_LOG_ERROR};
 	}
+}
+
+void VoidOutput::flush() {
+}
+
+Logger::Logger(VoidOutput&& output, LogLevel level)
+    : output{std::move(output)}, level{level} {
+}
+Logger::Logger(OFSOutput&& output, LogLevel level)
+    : output{std::move(output)}, level{level} {
+}
+
+void Logger::flush() {
+	std::visit([](auto& output) { output.flush(); }, output);
 }
 } // namespace juan

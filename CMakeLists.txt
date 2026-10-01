@@ -35,7 +35,7 @@ target_compile_options(JuanTests PUBLIC -Wall -Wextra -pedantic)
 endif()
 
 
-add_executable(juan src/main.cpp src/database.cpp src/result.cpp src/logger.cpp)
+add_executable(juan src/main.cpp src/database.cpp src/result.cpp src/logger.cpp src/timestamp.cpp)
 target_compile_options(juan PUBLIC -Wall -Wextra -pedantic)
 target_link_libraries(juan PRIVATE sqlite3)
 target_include_directories(juan PRIVATE inc)

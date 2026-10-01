@@ -18,6 +18,5 @@ using vec                       = std::vector<T, A>;
 template <typename T> using opt = std::optional<T>;
 using path = std::filesystem::path;
 
-
 } // namespace juan
 #endif /* ifndef JUAN_TYPES_H */
