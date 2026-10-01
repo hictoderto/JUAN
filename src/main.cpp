@@ -1,261 +1,731 @@
 #include "database.h"
 #include "result.h"
+#include "job.h"
+
+#include <errno.h>
 #include <fcntl.h>
 #include <iostream>
+#include <sqlite3.h>
+#include <types.h>
+#include <signal.h>
 #include <string>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
+#include <map>
 
 #include <logger.h>
 
 
+using namespace juan;
 using namespace std;
-
 const int MAX_JOBS = 10;
 
-struct Job {
-	pid_t pid;
-	string comando;
-};
+vector<Job> RuningJobs;
+map <JobID,pid_t> mapaIdPid ;
 
-vector<Job> jobs;
-
-// Revisa si alguno de los procesos terminó
 void actualizarJobs() {
 
-	for (auto it = jobs.begin(); it != jobs.end();) {
+    for (auto it = RuningJobs.begin(); it != RuningJobs.end();) {
 
-		int estado;
+        auto mapaIt = mapaIdPid.find(it->id);
 
-		pid_t resultado = waitpid(it->pid, &estado, WNOHANG);
+        if (mapaIt == mapaIdPid.end()) {
+            ++it;
+            continue;
+        }
 
-		if (resultado == 0) {
-			// El proceso sigue ejecutándose
-			++it;
-		} else if (resultado == it->pid) {
+        pid_t pid = mapaIt->second;
 
-			cout << "\n[JOB TERMINADO] PID: " << it->pid << endl;
+        int estado;
 
-			if (WIFEXITED(estado)) {
-				cout << "Comando: " << it->comando << endl;
-				cout << "Codigo: " << WEXITSTATUS(estado) << endl;
-			}
+        pid_t resultado =
+            waitpid(
+                pid,
+                &estado,
+                WNOHANG
+            );
 
-			it = jobs.erase(it);
-		} else {
-			++it;
-		}
-	}
+        if (resultado == 0) {
+
+            ++it;
+        }
+
+        else if (resultado == pid) {
+
+            cout << "\n[JOB TERMINADO]" << endl;
+
+            cout << "ID: "
+                 << it->id
+                 << endl;
+
+            cout << "PID: "
+                 << pid
+                 << endl;
+
+            cout << "Comando: "
+                 << it->command
+                 << endl;
+
+            if (WIFEXITED(estado)) {
+
+                int codigo =
+                    WEXITSTATUS(estado);
+
+                cout << "Codigo: "
+                     << codigo
+                     << endl;
+
+                it->result = codigo;
+
+                if (codigo == 0) {
+                    it->status = SUCCEDED;
+                }
+                else {
+                    it->status = FAILED;
+                }
+
+            }else if (WIFSIGNALED(estado)) {
+
+                cout
+                    << "Terminado por senal: "
+                    << WTERMSIG(estado)
+                    << endl;
+
+                if (it->status == CANCELING) {
+                    it->status = CANCELED;
+                }
+                else {
+                    it->status = FAILED;
+                }
+            }
+
+            else if (WIFSIGNALED(estado)) {
+
+                cout
+                    << "Terminado por senal: "
+                    << WTERMSIG(estado)
+                    << endl;
+
+                it->status = CANCELED;
+            }
+
+            mapaIdPid.erase(mapaIt);
+
+            it = RuningJobs.erase(it);
+
+            cout << "JUAN> " << flush;
+        }
+
+        else {
+
+            ++it;
+        }
+    }
 }
-#include <sqlite3.h>
 
 int main() {
-	using namespace juan;
 
-	auto logger_res = OFSOutput::open("juan_log");
-	if(!logger_res) {
-		std::cout << "Failed to open log file" << std::endl;
-	}
+    using namespace juan;
+
+    auto logger_res = OFSOutput::open("juan_log");
+
+    if (!logger_res) {
+        cout << "Failed to open log file" << endl;
+    }
+
+    Logger logger =
+        logger_res
+            ? Logger{
+                *std::move(logger_res),
+                LogLevel::INFO
+            }
+            : Logger{
+                VoidOutput{},
+                LogLevel::ERROR
+            };
+
+    auto init_res = DB::connect(
+        "data.db",
+        logger
+    );
+
+    if (!init_res) {
+
+        cerr << status_str(
+            init_res.error()
+        ) << endl;
+
+        return -1;
+    }
+
+    sqlite3_stmt* stmt;
+
+    sqlite3_prepare_v2(
+        init_res->db,
+        "CREATE TABLE IF NOT EXISTS jobs ("
+        "id INTEGER PRIMARY KEY, "
+        "command TEXT NOT NULL, "
+        "status INTEGER NOT NULL, "
+        "queued_at INTEGER, "
+        "launched_at INTEGER, "
+        "finished_at INTEGER, "
+        "result INTEGER"
+        ") STRICT",
+        -1,
+        &stmt,
+        nullptr
+    );
+
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    sqlite3_stmt* insert_job_stmt;
+
+    sqlite3_prepare_v2(
+        init_res->db,
+        "INSERT INTO jobs "
+        "(id,command,status) "
+        "VALUES (NULL,:cmd,:st) "
+        "RETURNING id",
+        -1,
+        &insert_job_stmt,
+        nullptr
+    );
+
+    auto cmd_idx =
+        sqlite3_bind_parameter_index(
+            insert_job_stmt,
+            ":cmd"
+        );
+
+    auto st_idx =
+        sqlite3_bind_parameter_index(
+            insert_job_stmt,
+            ":st"
+        );
+
+    auto get_id = [&](const string& cmd) {
+
+        int bind_res;
+
+        bind_res = sqlite3_bind_text64(
+            insert_job_stmt,
+            cmd_idx,
+            cmd.c_str(),
+            cmd.length(),
+            SQLITE_TRANSIENT,
+            SQLITE_UTF8
+        );
+
+        if (bind_res != SQLITE_OK) {
+
+            logger.error(
+                "error binding cmd {}",
+                sqlite3_errmsg(init_res->db)
+            );
+        }
+
+        bind_res = sqlite3_bind_int64(
+            insert_job_stmt,
+            st_idx,
+            1
+        );
 
-	Logger logger = logger_res ? Logger{*std::move(logger_res), LogLevel::INFO} : Logger{VoidOutput{}, LogLevel::ERROR};
+        if (bind_res != SQLITE_OK) {
 
+            logger.error(
+                "error binding st {}",
+                sqlite3_errmsg(init_res->db)
+            );
+        }
 
-	logger.error("Test error");
-	logger.warn("Test warn");
-	logger.info("Test info");
-	logger.debug("Test debug");
+        auto ret =
+            sqlite3_step(
+                insert_job_stmt
+            );
 
+        int64_t id = -1L;
 
-	auto init_res = DB::connect("data.db", logger);
-	
-	if(!init_res) {
-		cerr << status_str(init_res.error()) << endl;
-		return -1;
-	}
+        if (ret == SQLITE_ROW) {
 
+            id =
+                sqlite3_column_int64(
+                    insert_job_stmt,
+                    0
+                );
 
-	//sqlite3_open("data.db", &db);
+        } else {
 
-	sqlite3_stmt* stmt;
-	sqlite3_prepare_v2(init_res->db, "CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, command TEXT NOT NULL, status INTEGER NOT NULL, queued_at INTEGER, launched_at INTEGER, finished_at INTEGER, result INTEGER ) STRICT", -1, &stmt, nullptr);
-	sqlite3_step(stmt);
-	sqlite3_finalize(stmt);
+            logger.error(
+                "error inserting {}",
+                sqlite3_errmsg(init_res->db)
+            );
+        }
 
-	sqlite3_stmt* insert_job_stmt;
-	sqlite3_prepare_v2(init_res->db, "INSERT INTO jobs (id,command,status) VALUES (NULL,:cmd ,:st) RETURNING id", -1, &insert_job_stmt, nullptr);
-	auto cmd_idx = sqlite3_bind_parameter_index(insert_job_stmt, ":cmd");
-	auto st_idx = sqlite3_bind_parameter_index(insert_job_stmt, ":st");
+        ret =
+            sqlite3_step(
+                insert_job_stmt
+            );
 
-	logger.info("cmd_idx {}, st_idx {}", cmd_idx, st_idx );
+        if (ret == SQLITE_DONE) {
 
-	auto get_id = [&](const string& cmd) {
-		int bind_res;
-		bind_res = sqlite3_bind_text64(insert_job_stmt, cmd_idx, cmd.c_str(), cmd.length(), SQLITE_TRANSIENT, SQLITE_UTF8_ZT);
-		if(bind_res != SQLITE_OK) {
-			logger.error("error binding cmd {}", sqlite3_errmsg(init_res->db));
-		}
-		bind_res = sqlite3_bind_int64(insert_job_stmt, st_idx, 1);
-		if(bind_res != SQLITE_OK) {
-			logger.error("error binding st {}", sqlite3_errmsg(init_res->db));
-		}
-		auto ret = sqlite3_step(insert_job_stmt);
-		int64_t id = -1L;
-		if (ret == SQLITE_ROW) {
-			id = sqlite3_column_int64(insert_job_stmt, 0);
-		} else {
-			logger.error("error inserting {}", sqlite3_errmsg(init_res->db));
-		}
-		ret = sqlite3_step(insert_job_stmt);
-		if (ret == SQLITE_DONE) {
-			sqlite3_reset(insert_job_stmt);
-			return id;
-		}
-		return -1L;		
-	};
+            sqlite3_reset(
+                insert_job_stmt
+            );
 
+            return id;
+        }
 
+        return -1L;
+    };
 
-	cout << "JUAN iniciado. PID: " << getpid() << endl;
+    int flags =
+        fcntl(
+            STDIN_FILENO,
+            F_GETFL,
+            0
+        );
 
-	string linea;
+    if (flags == -1) {
 
-	cout << "JUAN> " << flush;
-	while (getline(cin, linea)) {
-		logger.info("Got commandline: \"{}\"", linea);
-		// Revisar procesos terminados
-		actualizarJobs();
+        perror("fcntl F_GETFL");
+        return 1;
+    }
 
+    if (fcntl(
+            STDIN_FILENO,
+            F_SETFL,
+            flags | O_NONBLOCK
+        ) == -1) {
 
-		if (linea == "salir" || linea == "exit") {
+        perror("fcntl F_SETFL");
+        return 1;
+    }
 
-			cout << "Cerrando JUAN..." << endl;
+    cout << "JUAN iniciado. PID: "
+         << getpid()
+         << endl;
 
-			// Esperar a que terminen los jobs
-			for (auto& job : jobs) {
+    cout << "JUAN> " << flush;
 
-				cout << "Esperando PID " << job.pid << "..." << endl;
+    char buffer[1024];
 
-				waitpid(job.pid, nullptr, 0);
-			}
+    string entrada;
 
-			break;
-		} else if (linea == "ayuda" || linea == "help") {
+    string linea;
 
-			cout << "Comandos disponibles:" << endl;
-			cout << "  ayuda   - Mostrar ayuda" << endl;
-			cout << "  status  - Mostrar estado" << endl;
-			cout << "  correr  - Ejecutar comando Linux" << endl;
-			cout << "  jobs    - Mostrar procesos" << endl;
-			cout << "  salir   - Cerrar JUAN" << endl;
+    while (true) {
 
-		} else if (linea == "status") {
+        actualizarJobs();
 
-			cout << "JUAN funcionando..." << endl;
+        ssize_t r =
+            read(
+                STDIN_FILENO,
+                buffer,
+                sizeof(buffer) - 1
+            );
 
-			cout << "Jobs activos: " << jobs.size() << "/" << MAX_JOBS << endl;
+        if (r > 0) {
 
-		} else if (linea == "jobs") {
+            buffer[r] = '\0';
 
-			actualizarJobs();
+            entrada += buffer;
 
-			if (jobs.empty()) {
+            size_t posicion;
 
-				cout << "No hay jobs ejecutandose." << endl;
+            while (
+                (posicion =
+                    entrada.find('\n'))
+                != string::npos
+            ) {
+
+                linea =
+                    entrada.substr(
+                        0,
+                        posicion
+                    );
 
-			} else {
+                entrada.erase(
+                    0,
+                    posicion + 1
+                );
 
-				cout << "\nJobs activos:" << endl;
+                logger.info(
+                    "Got commandline: \"{}\"",
+                    linea
+                );
 
-				for (const auto& job : jobs) {
+                if (
+                    linea == "salir" ||
+                    linea == "exit"
+                ) {
 
-					cout << "PID: " << job.pid << " | " << job.comando << endl;
-				}
-			}
+                    cout
+                        << "\nCerrando JUAN..."
+                        << endl;
 
-		} else if (linea.rfind("correr ", 0) == 0) {
+                    for (
+                        auto& job : RuningJobs
+                    ) {
 
-			string comando = linea.substr(7);
+                        cout
+                            << "Esperando PID "
+                            << mapaIdPid[job.id]
+                            << "..."
+                            << endl;
 
-			if (comando.empty()) {
+                        waitpid(
+                            mapaIdPid[job.id],
+                            nullptr,
+                            0
+                        );
+                    }
 
-				cout << "Debes escribir un comando." << endl;
+                    return 0;
+                }
 
-				continue;
-			}
+                else if (
+                    linea == "ayuda" ||
+                    linea == "help"
+                ) {
 
-			// Actualizar antes de crear otro proceso
-			actualizarJobs();
+                    cout
+                        << "Comandos disponibles:"
+                        << endl;
 
-			// Limitar a 10 procesos
-			if (jobs.size() >= MAX_JOBS) {
+                    cout
+                        << "  ayuda   - Mostrar ayuda"
+                        << endl;
 
-				cout << "Limite de " << MAX_JOBS << " jobs alcanzado." << endl;
-			} else {
+                    cout
+                        << "  status  - Mostrar estados"
+                        << endl;
 
+                    cout
+                        << "  correr  - Ejecutar comando Linux"
+                        << endl;
 
-			pid_t child = fork();
+                    cout
+                        << "  cancelar <id>  - cancela un proceso en ejecucion"
+                        << endl;
 
-			if (child == -1) {
+                    cout
+                        << "  jobs    - Mostrar procesos"
+                        << endl;
 
-				cout << "Error al crear el proceso." << endl;
+                    cout
+                        << "  salir   - Cerrar JUAN"
+                        << endl;
+                }
 
-				continue;
-			}
+                else if (
+                    linea == "status"
+                ) {
 
-			if (child == 0) {
+                    actualizarJobs();
 
-				int salida =
-				    open("job_output.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+                    cout
+                        << "JUAN funcionando..."
+                        << endl;
 
-				if (salida == -1) {
-					perror("open");
-					_exit(1);
-				}
+                    cout
+                        << "Jobs activos: "
+                        << RuningJobs.size()
+                        << "/"
+                        << MAX_JOBS
+                        << endl;
+                }
+				else if (
+                    linea.rfind("cancelar ", 0) == 0
+                ) {
 
-				dup2(salida, STDOUT_FILENO);
-				dup2(salida, STDERR_FILENO);
+                    string idTexto = linea.substr(9);
 
-				close(salida);
+                    if (idTexto.empty()) {
 
-				execl("/bin/sh", "sh", "-c", comando.c_str(), nullptr);
+                        cout
+                            << "Debes indicar el ID del job."
+                            << endl;
+                    }
 
-				_exit(127);
-			}
+                    else {
 
-			// =====================
-			// PROCESO PADRE
-			// =====================
+                        try {
 
-			Job nuevoJob;
+                            JobID id = stoll(idTexto);
 
-			nuevoJob.pid     = child;
-			nuevoJob.comando = comando;
+                            auto it = mapaIdPid.find(id);
 
-			jobs.push_back(nuevoJob);
+                            if (it == mapaIdPid.end()) {
 
-			cout << "Job creado." << endl;
-			cout << "PID: " << child << endl;
-			cout << "job id: " << get_id(comando) << endl;
-			cout << "Jobs activos: " << jobs.size() << "/" << MAX_JOBS << endl;
+                                cout
+                                    << "No existe un job con ID "
+                                    << id
+                                    << "."
+                                    << endl;
+                            }
 
-			// IMPORTANTE:
-			// NO hacemos waitpid(..., 0)
-			// El padre continúa inmediatamente.
-			}
-		} else if (linea == "correr") {
+                            else {
 
-			cout << "Debes escribir un comando "
-			        "despues de 'correr'."
-			     << endl;
+                                pid_t pid = it->second;
 
-		} else if (linea.empty()) {
-		} else {
-			cout << "Comando invalido" << endl;
-		}
+                                // Buscar el Job
+                                for (auto& job : RuningJobs) {
 
-		cout << "JUAN> " << flush;
-	}
+                                    if (job.id == id) {
 
-	return 0;
+                                        job.status = CANCELING;
+                                        break;
+                                    }
+                                }
+
+                                if (kill(pid, SIGTERM) == 0) {
+
+                                    cout
+                                        << "Cancelando job "
+                                        << id
+                                        << " (PID "
+                                        << pid
+                                        << ")..."
+                                        << endl;
+
+                                }
+                                else {
+
+                                    perror("kill");
+                                }
+                            }
+
+                        }
+                        catch (...) {
+
+                            cout
+                                << "ID invalido."
+                                << endl;
+                        }
+                    }
+                }
+
+                else if (
+                    linea == "jobs"
+                ) {
+
+                    actualizarJobs();
+
+                    if (RuningJobs.empty()) {
+
+                        cout
+                            << "No hay jobs ejecutandose."
+                            << endl;
+
+                    } else {
+
+                        cout
+                            << "\nJobs activos:"
+                            << endl;
+
+                        for (
+                            const auto& job :
+                            RuningJobs
+                        ) {
+
+                            cout
+                                << "ID: "
+                                << job.id
+                                << " | "
+                                << "PID: "
+                                << mapaIdPid[job.id]
+                                << " | "
+                                << "Comando: "
+                                << job.command
+                                << " | "
+                                << "Estado: "
+                                << static_cast<int>(job.status)
+                                << endl;
+                        }
+                    }
+                }
+
+                else if (
+                    linea.rfind(
+                        "correr ",
+                        0
+                    ) == 0
+                ) {
+
+                    string comando =
+                        linea.substr(7);
+
+                    if (comando.empty()) {
+
+                        cout
+                            << "Debes escribir un comando."
+                            << endl;
+
+                    }
+
+                    else if (
+                        RuningJobs.size()
+                        >= MAX_JOBS
+                    ) {
+
+                        cout
+                            << "Limite de "
+                            << MAX_JOBS
+                            << " jobs alcanzado."
+                            << endl;
+
+                    }
+
+                    else {
+
+                        pid_t child =
+                            fork();
+
+                        if (
+                            child == -1
+                        ) {
+
+                            cout
+                                << "Error al crear "
+                                << "el proceso."
+                                << endl;
+
+                        }
+
+                        else if (
+                            child == 0
+                        ) {
+
+                            int salida =
+                                open(
+                                    "job_output.log",
+                                    O_WRONLY |
+                                    O_CREAT |
+                                    O_APPEND,
+                                    0644
+                                );
+
+                            if (
+                                salida == -1
+                            ) {
+
+                                perror("open");
+
+                                _exit(1);
+                            }
+
+                            dup2(
+                                salida,
+                                STDOUT_FILENO
+                            );
+
+                            dup2(
+                                salida,
+                                STDERR_FILENO
+                            );
+
+                            close(salida);
+
+                            execl(
+                                "/bin/sh",
+                                "sh",
+                                "-c",
+                                comando.c_str(),
+                                nullptr
+                            );
+
+                            _exit(127);
+                        }
+
+                        else {
+
+                            Job nuevoJob;
+
+                            JobID id = get_id(comando);
+
+                            nuevoJob.id = id;
+                            nuevoJob.command = comando;
+                            nuevoJob.status =LAUNCHED;
+
+
+                            RuningJobs.push_back(nuevoJob);
+
+                            mapaIdPid[id]=child;
+
+                            cout
+                                << "Job creado."
+                                << endl;
+
+                            cout
+                                << "PID: "
+                                << child
+                                << endl;
+
+                            cout
+                                << "job id: "
+                                << id
+                                << endl;
+
+                            cout
+                                << "Jobs activos: "
+                                << RuningJobs.size()
+                                << "/"
+                                << MAX_JOBS
+                                << endl;
+							
+                        }
+                    }
+                }
+
+
+                else if (
+                    linea == "correr"
+                ) {
+
+                    cout
+                        << "Debes escribir un comando "
+                        << "despues de 'correr'."
+                        << endl;
+                }
+
+                else if (
+                    linea.empty()
+                ) {
+                }
+
+                else {
+
+                    cout
+                        << "Comando invalido"
+                        << endl;
+                }
+
+                cout
+                    << "JUAN> "
+                    << flush;
+            }
+        }
+
+        else if (r == -1) {
+
+            if (
+                errno != EAGAIN &&
+                errno != EWOULDBLOCK
+            ) {
+
+                perror("read");
+                break;
+            }
+
+        }
+
+        else if (r == 0) {
+
+            break;
+        }
+    }
+
+    return 0;
 }
