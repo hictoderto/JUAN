@@ -76,7 +76,7 @@ class Logger {
 	LogLevel level;
 
   public:
-	Logger(VoidOutput&& logger, LogLevel level);
+	Logger();
 	Logger(OFSOutput&& logger, LogLevel level);
 	template <typename... Args>
 	void format_to(std::format_string<Args...> fmt, Args&&... args) {

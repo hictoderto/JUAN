@@ -8,7 +8,7 @@ namespace juan {
 	struct Session {
 		s64 id{};
 		opt<Timestamp> started_at;
-		opt<Timestamp> finished_ad;
+		opt<Timestamp> ended_at;
 	};
 }
 #endif /* ifndef JUAN_SESSION_H */

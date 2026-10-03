@@ -48,8 +48,7 @@ Result<OFSOutput> OFSOutput::open(const path& file) noexcept {
 void VoidOutput::flush() {
 }
 
-Logger::Logger(VoidOutput&& output, LogLevel level)
-    : output{std::move(output)}, level{level} {
+Logger::Logger() : output{VoidOutput{}}, level{LogLevel::ERROR} {
 }
 Logger::Logger(OFSOutput&& output, LogLevel level)
     : output{std::move(output)}, level{level} {

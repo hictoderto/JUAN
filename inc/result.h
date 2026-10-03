@@ -6,7 +6,7 @@
 #include <string_view>
 
 namespace juan {
-enum struct Status { OK = 0, DB_ERROR, OPEN_LOG_ERROR };
+enum struct Status { OK = 0, DB_ERROR, DB_STMT_PREP_ERROR, OPEN_LOG_ERROR };
 
 std::string_view status_str(const Status& status) noexcept;
 template <typename T> using Result = std::expected<T, Status>;
