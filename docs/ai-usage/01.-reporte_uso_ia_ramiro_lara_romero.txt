@@ -1,0 +1,53 @@
+Herramienta: ChatGPT
+Tipo de resultado: Modificado en verificación
+Responsable: Ramiro Lara Romero
+
+Objetivo:
+Desarrollar un programa capaz de recibir y procesar comandos durante su ejecución, permitiendo la interacción con el usuario mediante una interfaz de línea de comandos.
+
+Resultado obtenido:
+A partir de la solicitud realizada, ChatGPT proporcionó una propuesta de código en C++ que permitía recibir argumentos de dos formas: al momento de iniciar el programa mediante la línea de comandos y posteriormente durante su ejecución mediante un modo interactivo. La estructura principal de la propuesta era similar a la siguiente:
+
+```cpp
+int main(int argc, char* argv[]) {
+    ...
+
+    if (argc > 1) {
+        ...
+
+        for (int i = 1; i < argc; i++) {
+            comando += argv[i];
+
+            if (i < argc - 1)
+                comando += " ";
+
+            ...
+        }
+
+        ...
+
+        return 0;
+    }
+
+    ...
+
+    while (true) {
+        cout << "juan> ";
+        getline(cin, linea);
+        ...
+    }
+}
+```
+
+Verificación realizada:
+Durante la revisión del código se comprobó que la propuesta permitía procesar un comando proporcionado como argumento al iniciar el programa. Sin embargo, se identificó que, después de ejecutar dicho comando, el programa finalizaba inmediatamente debido al `return 0` ubicado dentro del bloque encargado de procesar los argumentos iniciales.
+
+Como parte de la verificación, se eliminó inicialmente dicho `return`, permitiendo que el programa ejecutara el comando inicial y posteriormente continuara en el modo interactivo para recibir nuevos comandos.
+
+Modificación posterior al resultado:
+Después de analizar la propuesta y discutir su funcionamiento con el equipo de desarrollo, se determinó que el diseño definitivo de JUAN no requeriría la recepción de argumentos al momento de iniciar el programa. Se decidió que el programa debía iniciarse directamente en modo interactivo y permanecer a la espera de comandos proporcionados por el usuario durante su ejecución.
+
+Por esta decisión, se eliminó por completo del código la sección encargada de recibir y procesar argumentos mediante `argc` y `argv`. De esta manera, el comportamiento del programa quedó simplificado y alineado con el diseño acordado por el equipo.
+
+Resultado final:
+El resultado proporcionado por ChatGPT fue **modificado durante la verificación y posteriormente ajustado de acuerdo con una decisión de diseño del equipo**. Aunque la propuesta original permitía recibir argumentos al iniciar el programa, esta funcionalidad fue descartada y eliminada debido a que no formaba parte de los requerimientos definidos para la versión actual de JUAN.
