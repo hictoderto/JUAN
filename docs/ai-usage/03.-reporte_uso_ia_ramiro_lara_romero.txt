@@ -1,0 +1,84 @@
+Herramienta: ChatGPT
+Tipo de resultado: Modificado en verificación
+Responsable: Ramiro Lara Romero
+
+Objetivo:
+Implementar la funcionalidad del comando `correr` para que JUAN no solamente identifique y separe el texto escrito después del comando, sino que sea capaz de ejecutar dicho comando en el sistema operativo mediante la creación de un proceso independiente.
+
+Resultado obtenido:
+A partir de la solicitud realizada, ChatGPT proporcionó una propuesta en C++ para ejecutar los comandos recibidos mediante el comando `correr`. Para esto, se utilizaron las funciones propias de sistemas Linux `fork()`, `execl()` y `waitpid()`.
+
+La lógica principal propuesta fue la siguiente:
+
+```cpp
+pid_t child = fork();
+
+if (child == -1) {
+    cout << "Error al crear el proceso." << endl;
+    continue;
+}
+
+if (child == 0) {
+
+    // PROCESO HIJO
+    cout << "Ejecutando: " << comando << endl;
+
+    execl(
+        "/bin/sh",
+        "sh",
+        "-c",
+        comando.c_str(),
+        nullptr
+    );
+
+    cout << "Error al ejecutar el comando." << endl;
+    return 1;
+
+} else {
+
+    // PROCESO PADRE
+    cout << "PID del proceso: " << child << endl;
+
+    int estado;
+
+    waitpid(child, &estado, 0);
+
+    if (WIFEXITED(estado)) {
+        cout << "Proceso terminado con codigo: "
+             << WEXITSTATUS(estado) << endl;
+    }
+}
+```
+
+Funcionamiento:
+Cuando el usuario introduce un comando como:
+
+```text
+correr ls
+```
+
+JUAN obtiene el texto posterior a `correr` y crea un nuevo proceso mediante `fork()`.
+
+El proceso hijo utiliza `execl()` para ejecutar `/bin/sh` y enviarle el comando recibido. Por otra parte, el proceso padre conserva el control de JUAN y utiliza `waitpid()` para esperar a que el proceso hijo termine.
+
+Además, se obtiene y muestra el PID del proceso creado y, una vez que finaliza, se muestra su código de salida mediante `WEXITSTATUS()`.
+
+Por ejemplo, una ejecución puede producir un resultado similar a:
+
+```text
+JUAN> correr ls
+Ejecutando: ls
+PID del proceso: 15432
+archivo1.txt
+archivo2.txt
+Proceso terminado con codigo: 0
+JUAN>
+```
+
+Verificación realizada:
+Durante las pruebas se comprobó que JUAN podía recibir el comando mediante `correr`, crear un proceso hijo y ejecutar correctamente comandos del sistema operativo. También se verificó el manejo de errores cuando `fork()` no puede crear el proceso o cuando `execl()` no consigue ejecutar el comando.
+
+Se comprobó adicionalmente que el proceso padre espera la terminación del proceso hijo mediante `waitpid()`, permitiendo conocer posteriormente el código con el que terminó el comando.
+
+Resultado final:
+La propuesta proporcionada por ChatGPT fue utilizada como base para implementar la ejecución de comandos dentro de JUAN. Después de la verificación, se realizaron los ajustes necesarios para adaptarla al funcionamiento del proyecto y se confirmó que el comando `correr` puede utilizarse para crear un proceso independiente y ejecutar comandos del sistema Linux.

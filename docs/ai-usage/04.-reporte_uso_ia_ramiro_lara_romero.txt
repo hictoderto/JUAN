@@ -1,0 +1,72 @@
+Herramienta: ChatGPT
+Tipo de resultado: Modificado en verificación
+Responsable: Ramiro Lara Romero
+
+Objetivo:
+Modificar el funcionamiento de JUAN para que, al ejecutar un comando mediante `correr`, el programa principal no permanezca bloqueado esperando a que finalice el proceso. Se buscaba que la terminal quedara disponible inmediatamente para continuar utilizando JUAN y recibir nuevos comandos mientras el trabajo anterior permaneciera en ejecución.
+
+Resultado obtenido:
+A partir de la solicitud realizada, ChatGPT propuso modificar la implementación anterior, en la cual el proceso padre utilizaba `waitpid()` de manera bloqueante:
+
+```cpp
+waitpid(child, &estado, 0);
+```
+
+Esta implementación provocaba que JUAN tuviera que esperar hasta que el comando terminara antes de volver a mostrar el indicador `JUAN>` y permitir la entrada de un nuevo comando.
+
+Para solucionar este comportamiento, se propuso almacenar los procesos creados en una estructura `Job` y mantenerlos dentro de un vector:
+
+```cpp
+struct Job {
+    pid_t pid;
+    string comando;
+};
+
+vector<Job> jobs;
+```
+
+Posteriormente, se eliminó la espera bloqueante del proceso padre. Después de crear el proceso hijo, JUAN registra el nuevo trabajo y continúa inmediatamente con su ciclo principal:
+
+```cpp
+Job nuevoJob;
+
+nuevoJob.pid = child;
+nuevoJob.comando = comando;
+
+jobs.push_back(nuevoJob);
+
+cout << "Job creado." << endl;
+cout << "PID: " << child << endl;
+```
+
+De esta manera, el proceso hijo continúa ejecutando el comando mientras el proceso padre mantiene disponible la terminal para recibir nuevas instrucciones.
+
+Verificación realizada:
+Durante las pruebas se verificó que, después de introducir un comando como:
+
+```text
+correr sleep 100
+```
+
+JUAN crea el proceso correspondiente, muestra su PID y regresa inmediatamente al indicador:
+
+```text
+JUAN>
+```
+
+Esto permite introducir otro comando sin necesidad de esperar los 100 segundos establecidos en el ejemplo.
+
+También se incorporó la función `actualizarJobs()`, encargada de comprobar si alguno de los procesos registrados ya terminó mediante:
+
+```cpp
+waitpid(it->pid, &estado, WNOHANG);
+```
+
+El uso de `WNOHANG` permite consultar el estado del proceso sin bloquear la ejecución de JUAN. Cuando un job termina, se elimina de la lista y se muestra información sobre su finalización y código de salida.
+
+Resultado final:
+La modificación permitió que JUAN liberara la terminal inmediatamente después de crear un job, manteniendo el proceso en ejecución de forma independiente. Esto permitió continuar utilizando el programa y ejecutar nuevos comandos mientras existían otros jobs activos.
+
+Además, se incorporó un límite máximo de **10 jobs simultáneos**, así como los comandos `jobs` y `status` para consultar los procesos actualmente registrados y el número de trabajos activos.
+
+Por lo tanto, el resultado proporcionado por ChatGPT fue **modificado y verificado**, adaptándose posteriormente a las necesidades de funcionamiento establecidas para JUAN.

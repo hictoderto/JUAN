@@ -1,0 +1,21 @@
+Herramienta: ChatGPT
+Tipo de resultado: Aceptado después de verificación
+Responsable: Ramiro Lara Romero
+
+Objetivo:
+Generar documentación técnica que permitiera describir de manera clara el funcionamiento y la estructura del código desarrollado para JUAN. La documentación tenía como finalidad facilitar la comprensión del programa, registrar las funciones implementadas y servir como apoyo para el mantenimiento y desarrollo posterior del proyecto.
+
+Resultado obtenido:
+A partir de la solicitud realizada, ChatGPT generó una propuesta de documentación basada en el código proporcionado. En ella se describieron los principales componentes del programa, incluyendo la función principal, las estructuras utilizadas para representar los trabajos (`Job`), el manejo de procesos mediante `fork()`, la ejecución de comandos mediante `execl()`, la supervisión de procesos mediante `waitpid()` y el funcionamiento de los comandos disponibles en JUAN.
+
+También se solicitó explicar el propósito de las principales funciones y bloques de código, así como la interacción entre el proceso padre y los procesos hijos durante la ejecución de los trabajos.
+
+Verificación realizada:
+La documentación generada fue revisada comparándola directamente con la implementación existente del programa. Se verificó que las funciones, comandos y mecanismos descritos correspondieran con el comportamiento real del código y que no se incluyeran funcionalidades que todavía no estuvieran implementadas.
+
+Durante la revisión se realizaron los ajustes necesarios en aquellos apartados que requerían mayor precisión o que no representaban exactamente el funcionamiento actual del programa.
+
+Resultado final:
+Después de la revisión, la documentación fue considerada adecuada para describir la implementación actual de JUAN y se utilizó como apoyo para documentar el funcionamiento del proyecto.
+
+El resultado generado por ChatGPT fue **verificado antes de ser utilizado**, asegurando que la información documentada correspondiera con el código desarrollado y con las funcionalidades actualmente implementadas.

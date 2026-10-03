@@ -1,0 +1,85 @@
+Herramienta: ChatGPT
+Tipo de resultado: Modificado en verificación
+Responsable:Ramiro Lara Romero
+
+Objetivo:
+Implementar un comando `cancelar` que permitiera solicitar la terminación de un job que se encontrara actualmente en ejecución. El comando debía recibir el ID del job, localizar el proceso asociado y cambiar su estado a `CANCELING` mientras se realizaba la cancelación.
+
+Resultado obtenido:
+A partir de la solicitud realizada, ChatGPT proporcionó una propuesta de implementación mediante un bloque `else if` encargado de reconocer el comando `cancelar` y procesar el ID proporcionado por el usuario.
+
+La implementación propuesta fue estructurada de la siguiente manera:
+
+```cpp id="c6m7o8"
+else if (linea.rfind("cancelar ", 0) == 0) {
+
+    string idTexto = linea.substr(9);
+
+    if (idTexto.empty()) {
+        cout << "Debes indicar el ID del job." << endl;
+    }
+
+    else {
+        try {
+
+            JobID id = stoll(idTexto);
+
+            auto it = mapaIdPid.find(id);
+
+            if (it == mapaIdPid.end()) {
+                cout << "No existe un job con ID "
+                     << id << "." << endl;
+            }
+
+            else {
+
+                pid_t pid = it->second;
+
+                if (kill(pid, SIGTERM) == 0) {
+
+                    for (auto& job : RuningJobs) {
+
+                        if (job.id == id) {
+                            job.status = CANCELING;
+                            break;
+                        }
+                    }
+
+                    cout << "Cancelando job "
+                         << id
+                         << " (PID "
+                         << pid
+                         << ")..."
+                         << endl;
+                }
+
+                else {
+                    perror("kill");
+                }
+            }
+        }
+        catch (...) {
+            cout << "ID invalido." << endl;
+        }
+    }
+}
+```
+
+Funcionamiento:
+La implementación identifica las líneas que comienzan con `cancelar ` y obtiene el texto posterior mediante `substr(9)`. Posteriormente, dicho texto se convierte a un `JobID` utilizando `stoll()`.
+
+Una vez obtenido el ID, se consulta `mapaIdPid` para localizar el PID asociado al job. Si no existe un job con ese ID, se informa al usuario.
+
+Cuando el job es encontrado, se obtiene su PID y se utiliza `kill(pid, SIGTERM)` para enviar una señal de terminación al proceso. Si la señal se envía correctamente, el estado del job se actualiza a `CANCELING` dentro de `RuningJobs`.
+
+También se contemplaron casos de error, como no proporcionar un ID, introducir un ID con formato inválido o solicitar la cancelación de un job inexistente.
+
+Verificación realizada:
+Durante la revisión se comprobó que el comando permitiera identificar correctamente el job mediante su ID y que la solicitud de cancelación se reflejara en el estado correspondiente.
+
+También se verificó el manejo de entradas incorrectas y la respuesta del programa cuando el ID proporcionado no correspondía con ningún job registrado.
+
+Resultado final:
+La propuesta de ChatGPT fue utilizada como base para implementar el comando `cancelar`. Posteriormente fue revisada y modificada durante la integración con el código existente de JUAN, con el objetivo de adaptarla a las estructuras utilizadas por el proyecto, particularmente `mapaIdPid` y `RuningJobs`.
+
+El resultado permitió incorporar al sistema la capacidad de solicitar la cancelación de jobs mediante su identificador y mantener registrado el estado `CANCELING` durante el proceso de terminación.

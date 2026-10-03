@@ -1,0 +1,56 @@
+Herramienta: ChatGPT
+Tipo de resultado: Modificado en verificación
+Responsable: Ramiro Lara Romero
+
+Objetivo:
+Implementar el procesamiento del comando `correr` dentro de JUAN, de manera que el programa pueda identificar la palabra reservada `correr` al inicio de una línea y separar dicha palabra del texto que se encuentre posteriormente. El objetivo es permitir que el contenido posterior al comando sea tratado como la instrucción que deberá procesar el programa.
+
+Resultado obtenido:
+A partir de la solicitud realizada, ChatGPT proporcionó una propuesta en C++ para identificar cuando una línea comienza con el comando `correr` y obtener únicamente el contenido escrito después de este comando.
+
+La propuesta utiliza la función `rfind()` para comprobar que la línea comienza exactamente con `"correr "`:
+
+```cpp
+if (linea.rfind("correr ", 0) == 0) {
+
+    string texto = linea.substr(7);
+
+    cout << "Lo que se escribio despues de correr: "
+         << texto << endl;
+
+    continue;
+}
+```
+
+En esta implementación, `rfind("correr ", 0) == 0` permite verificar que la línea inicia con la palabra `correr` seguida de un espacio. Posteriormente, mediante `substr(7)`, se obtiene el contenido de la cadena a partir de la posición 7, eliminando de esta manera `correr ` y conservando únicamente el texto introducido después del comando.
+
+Por ejemplo, si el usuario introduce:
+
+```text
+correr sleep 100
+```
+
+el programa identifica `correr` como el comando principal y obtiene:
+
+```text
+sleep 100
+```
+
+como el texto restante.
+
+**Verificación realizada:**
+Durante las pruebas se verificó que el programa identifica correctamente las líneas que comienzan con `correr` y separa el comando del resto de la instrucción. También se contempló el caso en el que el usuario escribe únicamente `correr`, para evitar que el programa intente procesar una instrucción vacía.
+
+Para este caso se agregó la siguiente validación:
+
+```cpp
+if (linea == "correr") {
+    cout << "Debes escribir algo despues de 'correr'." << endl;
+    continue;
+}
+```
+
+De esta forma, el programa informa al usuario que debe proporcionar una instrucción después de `correr` y continúa ejecutándose sin finalizar.
+
+Resultado final:
+La propuesta de ChatGPT fue utilizada como base para implementar el reconocimiento y separación del comando `correr`. Después de la verificación, se confirmó que la lógica cumplía con el objetivo establecido, permitiendo distinguir el comando principal del texto que posteriormente será utilizado como instrucción para la ejecución de trabajos dentro de JUAN.
