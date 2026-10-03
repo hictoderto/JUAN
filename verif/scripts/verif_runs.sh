@@ -23,8 +23,11 @@ else
     exit 1
 fi
 
-echo "[3] Ejecutando pruebas..."
+echo "[3] Verificando si corre..."
 
 "$BUILD_DIR/juan"
+echo "[4] salir ..."
+printf "salir"
+
 
 echo "=== Verification complete ==="

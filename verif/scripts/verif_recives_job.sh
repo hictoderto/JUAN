@@ -23,9 +23,9 @@ fi
 echo "OK: ejecutable encontrado."
 
 echo "[3] Ejecutando prueba:"
-echo "    correr sleep 100"
+echo "    correr sleep 1"
 echo "    salir"
 
-printf "correr sleep 100\nsalir\n" | "$JUAN"
+printf "correr sleep 1\nsalir\n" | "$JUAN"
 
 echo "=== Verification  creacion de trabajo completa ==="

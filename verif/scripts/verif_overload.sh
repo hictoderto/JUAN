@@ -26,12 +26,12 @@ fi
 echo "OK: ejecutable encontrado."
 echo
 
-echo "[3] Enviando 11 procesos sleep 30..."
+echo "[3] Enviando 11 procesos sleep 10..."
 echo
 
 {
     for i in {1..11}; do
-        echo "correr sleep 30"
+        echo "correr sleep 10"
     done
 
     echo "jobs"
