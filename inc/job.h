@@ -2,6 +2,7 @@
 #define JUAN_JOB_H
 
 #include <types.h>
+#include <timestamp.h>
 
 namespace juan {
 
@@ -22,9 +23,9 @@ struct Job {
 	JobID id;
 	str command;
 	JobStatus status;
-	opt<timestamp> queued_at;
-	opt<timestamp> launched_at;
-	opt<timestamp> finished_at;
+	opt<Timestamp> queued_at;
+	opt<Timestamp> launched_at;
+	opt<Timestamp> finished_at;
 	opt<u8> result;
 };
 
