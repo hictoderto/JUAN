@@ -1,1 +1,6 @@
+(INFO): Started juan session with id: 2
+(INFO): Got commandline: "correr sleep 20"
+[ERROR]: error binding cmd out of memory
+[ERROR]: error binding st out of memory
+[ERROR]: error inserting out of memory
 (INFO): Got commandline: "salir"

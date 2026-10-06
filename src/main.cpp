@@ -389,6 +389,7 @@ int main() {
 
 					else {
 
+                        JobID id = get_id(comando); //Capturamos el id antes de hacer fork para evitar problemas de concurrencia
 						pid_t child = fork();
 
 						if (child == -1) {
@@ -399,23 +400,28 @@ int main() {
 						}
 
 						else if (child == 0) {
+                            string logFileNameOut = "job_output_" + to_string(id) + ".log";
+                            string logFileNameErr = "job_error_" + to_string(id) + ".log";
 
-							int salida =
-							    open("job_output.log",
-							         O_WRONLY | O_CREAT | O_APPEND, 0644);
+                            // Inicializamos el archivo de salida para stdout y stderr
+							int salida_out = open(logFileNameOut.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+                            int salida_err = open(logFileNameErr.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
 
-							if (salida == -1) {
+							if (salida_out == -1 || salida_err == -1) {
 
 								perror("open");
+
+                                if (salida_out != -1) close(salida_out);
+                                if (salida_err != -1) close(salida_err);
 
 								_exit(1);
 							}
 
-							dup2(salida, STDOUT_FILENO);
+							dup2(salida_out, STDOUT_FILENO);
+							dup2(salida_err, STDERR_FILENO);
 
-							dup2(salida, STDERR_FILENO);
-
-							close(salida);
+							close(salida_out);
+							close(salida_err);
 
 							execl("/bin/sh", "sh", "-c", comando.c_str(),
 							      nullptr);
@@ -426,8 +432,6 @@ int main() {
 						else {
 
 							Job nuevoJob;
-
-							JobID id = get_id(comando);
 
 							nuevoJob.id      = id;
 							nuevoJob.command = comando;
