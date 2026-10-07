@@ -1,1 +1,0 @@
-/usr/lib64/ccache/c++ -Wl,--dependency-file=CMakeFiles/juan.dir/link.d CMakeFiles/juan.dir/src/main.cpp.o CMakeFiles/juan.dir/src/database.cpp.o CMakeFiles/juan.dir/src/result.cpp.o CMakeFiles/juan.dir/src/logger.cpp.o -o juan  deps/SQLite/libsqlite3.a -lgcc_s_asneeded -lgcc_s_asneeded

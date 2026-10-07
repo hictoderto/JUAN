@@ -1,3 +1,0 @@
-/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/CMakeFiles/sqlite_amalgamation_3530400-populate.dir
-/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/CMakeFiles/edit_cache.dir
-/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/CMakeFiles/rebuild_cache.dir
