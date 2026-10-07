@@ -1,0 +1,14 @@
+# Target labels
+ sqlite_amalgamation_3530400-populate
+# Source files and their labels
+/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/CMakeFiles/sqlite_amalgamation_3530400-populate
+/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/CMakeFiles/sqlite_amalgamation_3530400-populate.rule
+/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/CMakeFiles/sqlite_amalgamation_3530400-populate-complete.rule
+/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/sqlite_amalgamation_3530400-populate-prefix/src/sqlite_amalgamation_3530400-populate-stamp/sqlite_amalgamation_3530400-populate-build.rule
+/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/sqlite_amalgamation_3530400-populate-prefix/src/sqlite_amalgamation_3530400-populate-stamp/sqlite_amalgamation_3530400-populate-configure.rule
+/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/sqlite_amalgamation_3530400-populate-prefix/src/sqlite_amalgamation_3530400-populate-stamp/sqlite_amalgamation_3530400-populate-download.rule
+/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/sqlite_amalgamation_3530400-populate-prefix/src/sqlite_amalgamation_3530400-populate-stamp/sqlite_amalgamation_3530400-populate-install.rule
+/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/sqlite_amalgamation_3530400-populate-prefix/src/sqlite_amalgamation_3530400-populate-stamp/sqlite_amalgamation_3530400-populate-mkdir.rule
+/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/sqlite_amalgamation_3530400-populate-prefix/src/sqlite_amalgamation_3530400-populate-stamp/sqlite_amalgamation_3530400-populate-patch.rule
+/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/sqlite_amalgamation_3530400-populate-prefix/src/sqlite_amalgamation_3530400-populate-stamp/sqlite_amalgamation_3530400-populate-test.rule
+/home/nlaptop/Projects/JUAN/deps/SQLite/sqlite_amalgamation_3530400-subbuild/sqlite_amalgamation_3530400-populate-prefix/src/sqlite_amalgamation_3530400-populate-stamp/sqlite_amalgamation_3530400-populate-update.rule

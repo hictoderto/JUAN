@@ -1,0 +1,64 @@
+
+---
+events:
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/share/cmake/Modules/CMakeDetermineSystem.cmake:12 (find_program)"
+      - "CMakeLists.txt:16 (project)"
+    mode: "program"
+    variable: "CMAKE_UNAME"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "uname"
+    candidate_directories:
+      - "/home/nlaptop/.config/herd-lite/bin/"
+      - "/home/nlaptop/.nvm/versions/node/v24.14.1/bin/"
+      - "/home/nlaptop/.local/bin/"
+      - "/home/nlaptop/bin/"
+      - "/usr/lib64/ccache/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/sbin/"
+      - "/home/nlaptop/.spicetify/"
+      - "/bin/"
+    searched_directories:
+      - "/home/nlaptop/.config/herd-lite/bin/uname"
+      - "/home/nlaptop/.nvm/versions/node/v24.14.1/bin/uname"
+      - "/home/nlaptop/.local/bin/uname"
+      - "/home/nlaptop/bin/uname"
+      - "/usr/lib64/ccache/uname"
+      - "/usr/local/bin/uname"
+    found: "/usr/bin/uname"
+    search_context:
+      ENV{PATH}:
+        - "/home/nlaptop/.config/herd-lite/bin"
+        - "/home/nlaptop/.nvm/versions/node/v24.14.1/bin"
+        - "/home/nlaptop/.config/herd-lite/bin"
+        - "/home/nlaptop/.local/bin"
+        - "/home/nlaptop/bin"
+        - "/usr/lib64/ccache"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/usr/local/sbin"
+        - "/usr/sbin"
+        - "/home/nlaptop/.spicetify"
+        - "/home/nlaptop/.spicetify"
+        - "/home/nlaptop/.spicetify"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/share/cmake/Modules/CMakeDetermineSystem.cmake:212 (message)"
+      - "CMakeLists.txt:16 (project)"
+    message: |
+      The system is: Linux - 7.2.5-200.fc44.x86_64 - x86_64
+...
