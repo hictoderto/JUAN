@@ -21,7 +21,7 @@ using namespace juan;
 using namespace std;
 const int MAX_JOBS = 10;
 
-vec<Job> RuningJobs;
+vector<Job> RuningJobs;
 map<JobID, pid_t> mapaIdPid;
 
 void actualizarJobs() {
@@ -104,6 +104,8 @@ void actualizarJobs() {
 
 int main() {
 
+	using namespace juan;
+
 	auto logger_res = OFSOutput::open("juan_log");
 	if (!logger_res) {
 		std::cout << "Failed to open log file" << std::endl;
@@ -118,7 +120,6 @@ int main() {
 		logger->error("Failed to connect to db {}", status_str(db.error()));
 		return -1;
 	}
-    auto db_conn = db -> db;
 
 	auto session_res = JuanSession::init(logger, std::move(*db));
 	if (!session_res) {
@@ -132,7 +133,7 @@ int main() {
 
 	sqlite3_stmt* stmt;
 
-	sqlite3_prepare_v2(db_conn,
+	sqlite3_prepare_v2(db->db,
 	                   "CREATE TABLE IF NOT EXISTS jobs ("
 	                   "id INTEGER PRIMARY KEY, "
 	                   "command TEXT NOT NULL, "
@@ -149,7 +150,7 @@ int main() {
 
 	sqlite3_stmt* insert_job_stmt;
 
-	sqlite3_prepare_v2(db_conn,
+	sqlite3_prepare_v2(db->db,
 	                   "INSERT INTO jobs "
 	                   "(id,command,status) "
 	                   "VALUES (NULL,:cmd,:st) "
@@ -169,14 +170,14 @@ int main() {
 
 		if (bind_res != SQLITE_OK) {
 
-			logger->error("error binding cmd {}", sqlite3_errmsg(db_conn));
+			logger->error("error binding cmd {}", sqlite3_errmsg(db->db));
 		}
 
 		bind_res = sqlite3_bind_int64(insert_job_stmt, st_idx, 1);
 
 		if (bind_res != SQLITE_OK) {
 
-			logger->error("error binding st {}", sqlite3_errmsg(db_conn));
+			logger->error("error binding st {}", sqlite3_errmsg(db->db));
 		}
 
 		auto ret = sqlite3_step(insert_job_stmt);
@@ -189,7 +190,7 @@ int main() {
 
 		} else {
 
-			logger->error("error inserting {}", sqlite3_errmsg(db_conn));
+			logger->error("error inserting {}", sqlite3_errmsg(db->db));
 		}
 
 		ret = sqlite3_step(insert_job_stmt);
@@ -388,6 +389,7 @@ int main() {
 
 					else {
 
+                        JobID id = get_id(comando); //Capturamos el id antes de hacer fork para evitar problemas de concurrencia
 						pid_t child = fork();
 
 						if (child == -1) {
@@ -398,23 +400,28 @@ int main() {
 						}
 
 						else if (child == 0) {
+                            string logFileNameOut = "job_output_" + to_string(id) + ".log";
+                            string logFileNameErr = "job_error_" + to_string(id) + ".log";
 
-							int salida =
-							    open("job_output.log",
-							         O_WRONLY | O_CREAT | O_APPEND, 0644);
+                            // Inicializamos el archivo de salida para stdout y stderr
+							int salida_out = open(logFileNameOut.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+                            int salida_err = open(logFileNameErr.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
 
-							if (salida == -1) {
+							if (salida_out == -1 || salida_err == -1) {
 
 								perror("open");
+
+                                if (salida_out != -1) close(salida_out);
+                                if (salida_err != -1) close(salida_err);
 
 								_exit(1);
 							}
 
-							dup2(salida, STDOUT_FILENO);
+							dup2(salida_out, STDOUT_FILENO);
+							dup2(salida_err, STDERR_FILENO);
 
-							dup2(salida, STDERR_FILENO);
-
-							close(salida);
+							close(salida_out);
+							close(salida_err);
 
 							execl("/bin/sh", "sh", "-c", comando.c_str(),
 							      nullptr);
@@ -425,8 +432,6 @@ int main() {
 						else {
 
 							Job nuevoJob;
-
-							JobID id = get_id(comando);
 
 							nuevoJob.id      = id;
 							nuevoJob.command = comando;
