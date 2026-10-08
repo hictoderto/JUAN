@@ -1,4 +1,4 @@
-# ADR-003: Seleccion de Mecanismo de Supervision y Recopilacion de Procesos Relativos a Menores
+# ADR-003: Seleccion de Mecanismo de Supervision y Recopilacion de Procesos Relativos a Procesos Hijo
 ## Estado
 Aceptado
 ## Problemática y Contexto
