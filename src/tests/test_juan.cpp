@@ -21,20 +21,20 @@ TEST(JobTest, StoresJobDetails) {
 	job.id          = 42;
 	job.command     = "sleep 10";
 	job.status      = RUNNING;
-	job.queued_at   = 100;
-	job.launched_at = 110;
-	job.finished_at = 120;
+	job.queued_at   = Timestamp(100);
+	job.launched_at = Timestamp(110);
+	job.finished_at = Timestamp(120);
 	job.result      = 0;
 
 	EXPECT_EQ(job.id, 42);
 	EXPECT_EQ(job.command, "sleep 10");
 	EXPECT_EQ(job.status, RUNNING);
 	ASSERT_TRUE(job.queued_at.has_value());
-	EXPECT_EQ(*job.queued_at, 100);
+	EXPECT_EQ(job.queued_at->as_s64(), 100);
 	ASSERT_TRUE(job.launched_at.has_value());
-	EXPECT_EQ(*job.launched_at, 110);
+	EXPECT_EQ(job.launched_at->as_s64(), 110);
 	ASSERT_TRUE(job.finished_at.has_value());
-	EXPECT_EQ(*job.finished_at, 120);
+	EXPECT_EQ(job.finished_at->as_s64(), 120);
 	ASSERT_TRUE(job.result.has_value());
 	EXPECT_EQ(*job.result, 0);
 }

@@ -120,6 +120,7 @@ int main() {
 		logger->error("Failed to connect to db {}", status_str(db.error()));
 		return -1;
 	}
+	auto dbCOnn = db -> db;
 
 	auto session_res = JuanSession::init(logger, std::move(*db));
 	if (!session_res) {
@@ -133,7 +134,7 @@ int main() {
 
 	sqlite3_stmt* stmt;
 
-	sqlite3_prepare_v2(db->db,
+	sqlite3_prepare_v2(dbCOnn,
 	                   "CREATE TABLE IF NOT EXISTS jobs ("
 	                   "id INTEGER PRIMARY KEY, "
 	                   "command TEXT NOT NULL, "
@@ -150,7 +151,7 @@ int main() {
 
 	sqlite3_stmt* insert_job_stmt;
 
-	sqlite3_prepare_v2(db->db,
+	sqlite3_prepare_v2(dbCOnn,
 	                   "INSERT INTO jobs "
 	                   "(id,command,status) "
 	                   "VALUES (NULL,:cmd,:st) "
@@ -170,14 +171,14 @@ int main() {
 
 		if (bind_res != SQLITE_OK) {
 
-			logger->error("error binding cmd {}", sqlite3_errmsg(db->db));
+			logger->error("error binding cmd {}", sqlite3_errmsg(dbCOnn));
 		}
 
 		bind_res = sqlite3_bind_int64(insert_job_stmt, st_idx, 1);
 
 		if (bind_res != SQLITE_OK) {
 
-			logger->error("error binding st {}", sqlite3_errmsg(db->db));
+			logger->error("error binding st {}", sqlite3_errmsg(dbCOnn));
 		}
 
 		auto ret = sqlite3_step(insert_job_stmt);
@@ -190,7 +191,7 @@ int main() {
 
 		} else {
 
-			logger->error("error inserting {}", sqlite3_errmsg(db->db));
+			logger->error("error inserting {}", sqlite3_errmsg(dbCOnn));
 		}
 
 		ret = sqlite3_step(insert_job_stmt);
