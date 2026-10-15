@@ -231,20 +231,6 @@ int main() {
         return 1;
     }
 
-    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
-
-    if (flags == -1) {
-
-        perror("fcntl F_GETFL");
-        return 1;
-    }
-
-    if (fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) == -1) {
-
-        perror("fcntl F_SETFL");
-        return 1;
-    }
-
     cout << "JUAN iniciado. PID: " << getpid() << endl;
 
     cout << "JUAN> " << flush;
