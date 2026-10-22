@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <job.h>
+#include <validador.h>
 
 using namespace juan;
 
@@ -48,4 +49,43 @@ TEST(JobTest, JobStatusValuesRemainStable) {
 	EXPECT_EQ(CANCELING, -2);
 	EXPECT_EQ(CANCELED, -3);
 	EXPECT_EQ(FAILED, -4);
+}
+
+TEST(CommandParserTest, SplitsExecutableAndArgumentsOnWhitespace) {
+	auto parsed = parse_command("grep -n needle file.txt");
+
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_EQ(parsed->size(), 4);
+	EXPECT_EQ((*parsed)[0], "grep");
+	EXPECT_EQ((*parsed)[1], "-n");
+	EXPECT_EQ((*parsed)[2], "needle");
+	EXPECT_EQ((*parsed)[3], "file.txt");
+}
+
+TEST(CommandParserTest, PreservesQuotedAndEscapedSpaces) {
+	auto parsed = parse_command("echo 'hello world' \"from JUAN\" escaped\\ value");
+
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_EQ(parsed->size(), 4);
+	EXPECT_EQ((*parsed)[0], "echo");
+	EXPECT_EQ((*parsed)[1], "hello world");
+	EXPECT_EQ((*parsed)[2], "from JUAN");
+	EXPECT_EQ((*parsed)[3], "escaped value");
+}
+
+TEST(CommandParserTest, PreservesEmptyQuotedArgumentsAndEmptyInput) {
+	auto parsed = parse_command("cmd \"\" ''");
+	auto empty = parse_command(" \t ");
+
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_EQ(parsed->size(), 3);
+	EXPECT_TRUE((*parsed)[1].empty());
+	EXPECT_TRUE((*parsed)[2].empty());
+	ASSERT_TRUE(empty.has_value());
+	EXPECT_TRUE(empty->empty());
+}
+
+TEST(CommandParserTest, RejectsUnclosedQuotesAndTrailingEscape) {
+	EXPECT_EQ(parse_command("echo 'unfinished").error(), Status::PARSE_ERROR);
+	EXPECT_EQ(parse_command("echo trailing\\").error(), Status::PARSE_ERROR);
 }

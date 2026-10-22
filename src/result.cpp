@@ -13,6 +13,8 @@ std::string_view status_str(const Status& status) noexcept {
 		return "error opening log"sv;
 	case Status::DB_STMT_PREP_ERROR:
 		return "error preparing stmt"sv;
+	case Status::PARSE_ERROR:
+		return "error parsing command"sv;
 	}
 	return "invalid_status"sv;
 }
