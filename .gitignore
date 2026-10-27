@@ -1,5 +1,6 @@
 build
 juan_log
+logs
 *.db
 *.old
 *.log

@@ -31,7 +31,7 @@ echo
 
 {
     for i in {1..11}; do
-        echo "correr sleep 10"
+        echo "correr sleep 100"
     done
 
     echo "jobs"

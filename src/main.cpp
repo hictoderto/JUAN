@@ -4,9 +4,11 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <filesystem>
 #include <iostream>
 #include <map>
 #include <poll.h>
+#include <queue>
 #include <signal.h>
 #include <sqlite3.h>
 #include <string>
@@ -21,7 +23,9 @@
 using namespace juan;
 using namespace std;
 const int MAX_JOBS = 10;
+const int MAX_COLA = 5;
 
+queue<Job> trabajosEnCola;
 vector<Job> RuningJobs;
 map<JobID, pid_t> mapaIdPid;
 int sigchld_pipe[2];
@@ -34,6 +38,61 @@ void manejarSIGCHLD(int) {
     (void)write(sigchld_pipe[1], &byte, 1);
 
     errno = errorAnterior;
+}
+void correr(Job nuevoJob) {
+    pid_t child = fork();
+
+    if (child == -1) {
+
+        cout << "Error al crear " << "el proceso." << endl;
+
+    }
+
+    else if (child == 0) {
+        string logFileNameOut = "logs/job_output/" + to_string(nuevoJob.id) + ".log";
+        string logFileNameErr = "logs/job_error/" + to_string(nuevoJob.id) + ".log";
+
+        // Inicializamos el archivo de salida para stdout y stderr
+        int salida_out = open(logFileNameOut.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+        int salida_err = open(logFileNameErr.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+
+        if (salida_out == -1 || salida_err == -1) {
+
+            perror("open");
+
+            if (salida_out != -1)
+                close(salida_out);
+            if (salida_err != -1)
+                close(salida_err);
+
+            _exit(1);
+        }
+
+        dup2(salida_out, STDOUT_FILENO);
+        dup2(salida_err, STDERR_FILENO);
+
+        close(salida_out);
+        close(salida_err);
+
+        execl("/bin/sh", "sh", "-c", nuevoJob.command.c_str(), nullptr);
+
+        _exit(127);
+    }
+
+    else {
+
+        RuningJobs.push_back(nuevoJob);
+
+        mapaIdPid[nuevoJob.id] = child;
+
+        cout << "Job creado." << endl;
+
+        cout << "PID: " << child << endl;
+
+        cout << "job id: " << nuevoJob.id << endl;
+
+        cout << "Jobs activos: " << RuningJobs.size() << "/" << MAX_JOBS << endl;
+    }
 }
 
 void actualizarJobs() {
@@ -103,6 +162,12 @@ void actualizarJobs() {
             mapaIdPid.erase(mapaIt);
 
             it = RuningJobs.erase(it);
+            if (!trabajosEnCola.empty()) {
+                Job siguiente = trabajosEnCola.front();
+                trabajosEnCola.pop();
+
+                correr(siguiente);
+            }
 
             cout << "JUAN> " << flush;
         }
@@ -117,6 +182,7 @@ void actualizarJobs() {
 int main() {
 
     using namespace juan;
+    namespace fs = std::filesystem;
 
     auto logger_res = OFSOutput::open("juan_log");
     if (!logger_res) {
@@ -126,6 +192,15 @@ int main() {
     auto logger = std::make_shared<Logger>();
     if (logger_res)
         *logger = Logger(std::move(*logger_res), LogLevel::INFO);
+    try {
+        fs::create_directories("logs/job_output");
+        fs::create_directories("logs/job_error");
+
+        logger->info("Directorios de logs creados correctamente.");
+    } catch (const fs::filesystem_error& e) {
+        logger->error("Error al crear directorios: ", e.what());
+        return 1;
+    }
 
     auto db = DB::connect("data.db", logger);
     if (!db) {
@@ -172,7 +247,7 @@ int main() {
 
     auto st_idx = sqlite3_bind_parameter_index(insert_job_stmt, ":st");
 
-    auto get_id = [&](const string& cmd) {
+    auto get_id = [&](const string& cmd, s8 status) {
         int bind_res;
 
         bind_res = sqlite3_bind_text64(insert_job_stmt, cmd_idx, cmd.c_str(), cmd.length(),
@@ -183,7 +258,7 @@ int main() {
             logger->error("error binding cmd {}", sqlite3_errmsg(dbCOnn));
         }
 
-        bind_res = sqlite3_bind_int64(insert_job_stmt, st_idx, 1);
+        bind_res = sqlite3_bind_int64(insert_job_stmt, st_idx, status);
 
         if (bind_res != SQLITE_OK) {
 
@@ -282,218 +357,178 @@ int main() {
 
                     logger->info("Got commandline: \"{}\"", linea);
 
-                if (linea == "salir" || linea == "exit") {
+                    if (linea == "salir" || linea == "exit") {
 
-                    cout << "\nCerrando JUAN..." << endl;
+                        cout << "\nCerrando JUAN..." << endl;
 
-                    for (auto& job : RuningJobs) {
+                        for (auto& job : RuningJobs) {
 
-                        cout << "Esperando PID " << mapaIdPid[job.id] << "..." << endl;
+                            cout << "Esperando PID " << mapaIdPid[job.id] << "..." << endl;
 
-                        waitpid(mapaIdPid[job.id], nullptr, 0);
-                    }
-
-                    return 0;
-                }
-
-                else if (linea == "ayuda" || linea == "help") {
-
-                    cout << "Comandos disponibles:" << endl;
-
-                    cout << "  ayuda   - Mostrar ayuda" << endl;
-
-                    cout << "  status  - Mostrar estados" << endl;
-
-                    cout << "  correr  - Ejecutar comando Linux" << endl;
-
-                    cout << "  cancelar <id>  - cancela un proceso en ejecucion" << endl;
-
-                    cout << "  jobs    - Mostrar procesos" << endl;
-
-                    cout << "  salir   - Cerrar JUAN" << endl;
-                }
-
-                else if (linea == "status") {
-
-                    actualizarJobs();
-
-                    cout << "JUAN funcionando..." << endl;
-
-                    cout << "Jobs activos: " << RuningJobs.size() << "/" << MAX_JOBS << endl;
-                } else if (linea.rfind("cancelar ", 0) == 0) {
-
-                    string idTexto = linea.substr(9);
-
-                    if (idTexto.empty()) {
-
-                        cout << "Debes indicar el ID del job." << endl;
-                    }
-
-                    else {
-
-                        try {
-
-                            JobID id = stoll(idTexto);
-
-                            auto it = mapaIdPid.find(id);
-
-                            if (it == mapaIdPid.end()) {
-
-                                cout << "No existe un job con ID " << id << "." << endl;
-                            }
-
-                            else {
-
-                                pid_t pid = it->second;
-
-                                // Buscar el Job
-                                for (auto& job : RuningJobs) {
-
-                                    if (job.id == id) {
-
-                                        job.status = CANCELING;
-                                        break;
-                                    }
-                                }
-
-                                if (kill(pid, SIGTERM) == 0) {
-
-                                    cout << "Cancelando job " << id << " (PID " << pid << ")..."
-                                         << endl;
-
-                                } else {
-
-                                    perror("kill");
-                                }
-                            }
-
-                        } catch (...) {
-
-                            cout << "ID invalido." << endl;
-                        }
-                    }
-                }
-
-                else if (linea == "jobs") {
-
-                    actualizarJobs();
-
-                    if (RuningJobs.empty()) {
-
-                        cout << "No hay jobs ejecutandose." << endl;
-
-                    } else {
-
-                        cout << "\nJobs activos:" << endl;
-
-                        for (const auto& job : RuningJobs) {
-
-                            cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
-                                 << " | " << "Comando: " << job.command << " | "
-                                 << "Estado: " << static_cast<int>(job.status) << endl;
-                        }
-                    }
-                }
-
-                else if (linea.rfind("correr ", 0) == 0) {
-
-                    string comando = linea.substr(7);
-
-                    if (comando.empty()) {
-
-                        cout << "Debes escribir un comando." << endl;
-
-                    }
-
-                    else if (RuningJobs.size() >= MAX_JOBS) {
-
-                        cout << "Limite de " << MAX_JOBS << " jobs alcanzado." << endl;
-
-                    }
-
-                    else {
-
-                        JobID id = get_id(comando); // Capturamos el id antes de hacer fork para
-                                                    // evitar problemas de concurrencia
-                        pid_t child = fork();
-
-                        if (child == -1) {
-
-                            cout << "Error al crear " << "el proceso." << endl;
-
+                            waitpid(mapaIdPid[job.id], nullptr, 0);
                         }
 
-                        else if (child == 0) {
-                            string logFileNameOut = "job_output_" + to_string(id) + ".log";
-                            string logFileNameErr = "job_error_" + to_string(id) + ".log";
+                        return 0;
+                    }
 
-                            // Inicializamos el archivo de salida para stdout y stderr
-                            int salida_out =
-                                open(logFileNameOut.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
-                            int salida_err =
-                                open(logFileNameErr.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+                    else if (linea == "ayuda" || linea == "help") {
 
-                            if (salida_out == -1 || salida_err == -1) {
+                        cout << "Comandos disponibles:" << endl;
 
-                                perror("open");
+                        cout << "  ayuda   - Mostrar ayuda" << endl;
 
-                                if (salida_out != -1)
-                                    close(salida_out);
-                                if (salida_err != -1)
-                                    close(salida_err);
+                        cout << "  status  - Mostrar estados" << endl;
 
-                                _exit(1);
-                            }
+                        cout << "  correr  - Ejecutar comando Linux" << endl;
 
-                            dup2(salida_out, STDOUT_FILENO);
-                            dup2(salida_err, STDERR_FILENO);
+                        cout << "  cancelar <id>  - cancela un proceso en ejecucion" << endl;
 
-                            close(salida_out);
-                            close(salida_err);
+                        cout << "  jobs    - Mostrar procesos" << endl;
 
-                            execl("/bin/sh", "sh", "-c", comando.c_str(), nullptr);
+                        cout << "  salir   - Cerrar JUAN" << endl;
+                    }
 
-                            _exit(127);
+                    else if (linea == "status") {
+
+                        actualizarJobs();
+
+                        cout << "JUAN funcionando..." << endl;
+
+                        cout << "Jobs activos: " << RuningJobs.size() << "/" << MAX_JOBS << endl;
+                    } else if (linea.rfind("cancelar ", 0) == 0) {
+
+                        string idTexto = linea.substr(9);
+
+                        if (idTexto.empty()) {
+
+                            cout << "Debes indicar el ID del job." << endl;
                         }
 
                         else {
 
+                            try {
+
+                                JobID id = stoll(idTexto);
+
+                                auto it = mapaIdPid.find(id);
+
+                                if (it == mapaIdPid.end()) {
+
+                                    cout << "No existe un job con ID " << id << "." << endl;
+                                }
+
+                                else {
+
+                                    pid_t pid = it->second;
+
+                                    // Buscar el Job
+                                    for (auto& job : RuningJobs) {
+
+                                        if (job.id == id) {
+
+                                            job.status = CANCELING;
+                                            break;
+                                        }
+                                    }
+
+                                    if (kill(pid, SIGTERM) == 0) {
+
+                                        cout << "Cancelando job " << id << " (PID " << pid << ")..."
+                                             << endl;
+
+                                    } else {
+
+                                        perror("kill");
+                                    }
+                                }
+
+                            } catch (...) {
+
+                                cout << "ID invalido." << endl;
+                            }
+                        }
+                    }
+
+                    else if (linea == "jobs") {
+
+                        actualizarJobs();
+
+                        if (RuningJobs.empty()) {
+
+                            cout << "No hay jobs ejecutandose." << endl;
+
+                        } else {
+
+                            cout << "\nJobs activos:" << endl;
+
+                            for (const auto& job : RuningJobs) {
+
+                                cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
+                                     << " | " << "Comando: " << job.command << " | "
+                                     << "Estado: " << static_cast<int>(job.status) << endl;
+                            }
+                        }
+                    }
+
+                    else if (linea.rfind("correr ", 0) == 0) {
+
+                        string comando = linea.substr(7);
+
+                        if (comando.empty()) {
+
+                            cout << "Debes escribir un comando." << endl;
+
+                        } else if (trabajosEnCola.size() >= MAX_COLA) {
+                            cout << "Limite en cola de " << MAX_COLA << " jobs alcanzado." << endl;
+                        } else if (RuningJobs.size() >= MAX_JOBS &&
+                                   trabajosEnCola.size() < MAX_COLA) {
+
+                            JobID id = get_id(comando, QUEUED);
                             Job nuevoJob;
 
                             nuevoJob.id = id;
                             nuevoJob.command = comando;
-                            nuevoJob.status = LAUNCHED;
+                            nuevoJob.status = QUEUED;
 
-                            RuningJobs.push_back(nuevoJob);
-
-                            mapaIdPid[id] = child;
-
-                            cout << "Job creado." << endl;
-
-                            cout << "PID: " << child << endl;
+                            trabajosEnCola.push(nuevoJob);
+                            cout << "Job creado en cola." << endl;
 
                             cout << "job id: " << id << endl;
 
                             cout << "Jobs activos: " << RuningJobs.size() << "/" << MAX_JOBS
                                  << endl;
+                            cout << "posicion en cola: " << trabajosEnCola.size() << "/" << MAX_COLA
+                                 << endl;
+
                         }
+
+                        else {
+
+                            JobID id = get_id(comando, LAUNCHED);
+                            Job nuevoJob;
+
+                            nuevoJob.id = id;
+                            nuevoJob.command = comando;
+                            nuevoJob.status = LAUNCHED;
+                            correr(nuevoJob);
+                        }
+
                     }
-                }
 
-                else if (linea == "correr") {
+                    else if (linea == "correr") {
 
-                    cout << "Debes escribir un comando " << "despues de 'correr'." << endl;
-                }
+                        cout << "Debes escribir un comando " << "despues de 'correr'." << endl;
+                    }
 
-                else if (linea.empty()) {
-                }
+                    else if (linea.empty()) {
+                    }
 
-                else {
+                    else {
 
-                    cout << "Comando invalido" << endl;
-                }
+                        cout << "Comando invalido" << endl;
+                    }
 
-                cout << "JUAN> " << flush;
+                    cout << "JUAN> " << flush;
                 }
             } else if (r == 0) {
                 // La entrada estándar se cerró.
@@ -514,7 +549,6 @@ int main() {
 
     close(sigchld_pipe[0]);
     close(sigchld_pipe[1]);
-    
 
     return 0;
 }
