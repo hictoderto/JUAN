@@ -40,7 +40,7 @@ void manejarSIGCHLD(int) {
     errno = errorAnterior;
 }
 
-bool cancelarEnCola(JobID id, sqlite3* dbConn,auto logger) {
+bool cancelarEnCola(JobID id, sqlite3* dbConn, auto logger) {
     queue<Job> auxiliar;
     bool encontrado = false;
 
@@ -68,7 +68,7 @@ bool cancelarEnCola(JobID id, sqlite3* dbConn,auto logger) {
     const char* sql = "UPDATE jobs SET status = ? WHERE id = ?";
 
     if (sqlite3_prepare_v2(dbConn, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        logger -> error("Error preparando actualizacion: {}" , sqlite3_errmsg(dbConn)) ;
+        logger->error("Error preparando actualizacion: {}", sqlite3_errmsg(dbConn));
         return true; // Se eliminó de la cola, aunque falló SQLite.
     }
 
@@ -77,7 +77,7 @@ bool cancelarEnCola(JobID id, sqlite3* dbConn,auto logger) {
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
 
-        logger -> error("Error actualizando job:: {}" , sqlite3_errmsg(dbConn)) ;
+        logger->error("Error actualizando job:: {}", sqlite3_errmsg(dbConn));
     }
 
     sqlite3_finalize(stmt);
@@ -461,7 +461,7 @@ int main() {
                             try {
 
                                 JobID id = stoll(idTexto);
-                                if (cancelarEnCola(id, dbCOnn,logger)) {
+                                if (cancelarEnCola(id, dbCOnn, logger)) {
                                     cout << "Job " << id << " cancelado y eliminado de la cola."
                                          << endl;
                                 } else {
@@ -518,7 +518,7 @@ int main() {
 
                                 cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
                                      << " | " << "Comando: " << job.command << " | "
-                                     << "Estado: " << static_cast<int>(job.status) << endl;
+                                     << "Estado: " << Jobs_tatus_str(job.status) << endl;
                             }
                         }
                     } else if (linea == "cola") {
@@ -534,7 +534,7 @@ int main() {
 
                                 cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
                                      << " | " << "Comando: " << job.command << " | "
-                                     << "Estado: " << static_cast<int>(job.status) << endl;
+                                     << "Estado: " << Jobs_tatus_str(job.status) << endl;
 
                                 auxiliar.pop();
                             }
@@ -557,7 +557,7 @@ int main() {
 
                                 cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
                                      << " | " << "Comando: " << job.command << " | "
-                                     << "Estado: " << static_cast<int>(job.status) << endl;
+                                     << "Estado: " << Jobs_tatus_str(job.status) << endl;
                             }
                             if (trabajosEnCola.empty()) {
                                 cout << "No hay Jobs en cola" << endl;
@@ -571,7 +571,7 @@ int main() {
                                     cout << "ID: " << job.id << " | "
                                          << "PID: " << mapaIdPid[job.id] << " | "
                                          << "Comando: " << job.command << " | "
-                                         << "Estado: " << static_cast<int>(job.status) << endl;
+                                         << "Estado: " << Jobs_tatus_str(job.status) << endl;
 
                                     auxiliar.pop();
                                 }
@@ -650,7 +650,7 @@ int main() {
         // Detectar errores en los descriptores.
         if ((fds[0].revents & (POLLERR | POLLNVAL)) ||
             (fds[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
-            logger->info( "Error en un descriptor de poll().") ;
+            logger->info("Error en un descriptor de poll().");
             break;
         }
     }

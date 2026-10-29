@@ -17,6 +17,29 @@ enum JobStatus : s8 {
 	FAILED    = -4,
 };
 
+constexpr std::string_view Jobs_tatus_str(JobStatus status) noexcept {
+    switch (status) {
+        case QUEUED:
+            return "Encolado";
+        case LAUNCHED:
+            return "lanzado";
+        case RUNNING:
+            return "RUNNING";
+        case SUCCEDED:
+            return "corriedno";
+        case REJECTED:
+            return "rechado";
+        case CANCELING:
+            return "CANCELING";
+        case CANCELED:
+            return "cancelado";
+        case FAILED:
+            return "fallido";
+    }
+
+    return "INVALID_STATUS";
+}
+
 using JobID = s64;
 
 struct Job {
