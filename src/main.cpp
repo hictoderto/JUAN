@@ -22,7 +22,7 @@
 
 using namespace juan;
 using namespace std;
-const int MAX_JOBS = 10;
+const int MAX_JOBS = 5;
 const int MAX_COLA = 5;
 
 queue<Job> trabajosEnCola;
@@ -39,6 +39,51 @@ void manejarSIGCHLD(int) {
 
     errno = errorAnterior;
 }
+
+bool cancelarEnCola(JobID id, sqlite3* dbConn) {
+    queue<Job> auxiliar;
+    bool encontrado = false;
+
+    while (!trabajosEnCola.empty()) {
+        Job actual = trabajosEnCola.front();
+        trabajosEnCola.pop();
+
+        if (actual.id == id) {
+            encontrado = true;
+            continue; // No lo copiamos: queda eliminado.
+        }
+
+        auxiliar.push(actual);
+    }
+
+    trabajosEnCola = std::move(auxiliar);
+
+    if (!encontrado) {
+        return false;
+    }
+
+    // Actualizar el estado del job cancelado en SQLite.
+    sqlite3_stmt* stmt = nullptr;
+
+    const char* sql = "UPDATE jobs SET status = ? WHERE id = ?";
+
+    if (sqlite3_prepare_v2(dbConn, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        cerr << "Error preparando actualizacion: " << sqlite3_errmsg(dbConn) << endl;
+        return true; // Se eliminó de la cola, aunque falló SQLite.
+    }
+
+    sqlite3_bind_int(stmt, 1, CANCELED);
+    sqlite3_bind_int64(stmt, 2, id);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        cerr << "Error actualizando job: " << sqlite3_errmsg(dbConn) << endl;
+    }
+
+    sqlite3_finalize(stmt);
+
+    return true;
+}
+
 void correr(Job nuevoJob) {
     pid_t child = fork();
 
@@ -375,17 +420,21 @@ int main() {
 
                         cout << "Comandos disponibles:" << endl;
 
-                        cout << "  ayuda   - Mostrar ayuda" << endl;
+                        cout << "  ayuda          - Mostrar ayuda" << endl;
 
-                        cout << "  status  - Mostrar estados" << endl;
+                        cout << "  status         - Mostrar estados" << endl;
 
-                        cout << "  correr  - Ejecutar comando Linux" << endl;
+                        cout << "  correr         - Ejecutar comando Linux" << endl;
 
                         cout << "  cancelar <id>  - cancela un proceso en ejecucion" << endl;
 
-                        cout << "  jobs    - Mostrar procesos" << endl;
+                        cout << "  corriendo      - Mostrar todos los procesos activos" << endl;
 
-                        cout << "  salir   - Cerrar JUAN" << endl;
+                        cout << "  cola           - Mostrar todos los procesos en la cola" << endl;
+
+                        cout << "  jobs           - Mostrar todos los procesos" << endl;
+
+                        cout << "  salir          - Cerrar JUAN" << endl;
                     }
 
                     else if (linea == "status") {
@@ -395,6 +444,8 @@ int main() {
                         cout << "JUAN funcionando..." << endl;
 
                         cout << "Jobs activos: " << RuningJobs.size() << "/" << MAX_JOBS << endl;
+                        cout << "Jobs en cola: " << trabajosEnCola.size() << "/" << MAX_COLA
+                             << endl;
                     } else if (linea.rfind("cancelar ", 0) == 0) {
 
                         string idTexto = linea.substr(9);
@@ -409,42 +460,82 @@ int main() {
                             try {
 
                                 JobID id = stoll(idTexto);
+                                if (cancelarEnCola(id, dbCOnn)) {
+                                    cout << "Job " << id << " cancelado y eliminado de la cola."
+                                         << endl;
+                                } else {
 
-                                auto it = mapaIdPid.find(id);
+                                    auto it = mapaIdPid.find(id);
 
-                                if (it == mapaIdPid.end()) {
+                                    if (it == mapaIdPid.end()) {
 
-                                    cout << "No existe un job con ID " << id << "." << endl;
-                                }
+                                        cout << "No existe un job con ID " << id << "." << endl;
+                                    }
 
-                                else {
+                                    else {
 
-                                    pid_t pid = it->second;
+                                        pid_t pid = it->second;
 
-                                    // Buscar el Job
-                                    for (auto& job : RuningJobs) {
+                                        // Buscar el Job
+                                        for (auto& job : RuningJobs) {
 
-                                        if (job.id == id) {
+                                            if (job.id == id) {
 
-                                            job.status = CANCELING;
-                                            break;
+                                                job.status = CANCELING;
+                                                break;
+                                            }
+                                        }
+
+                                        if (kill(pid, SIGTERM) == 0) {
+
+                                            cout << "Cancelando job " << id << " (PID " << pid
+                                                 << ")..." << endl;
+
+                                        } else {
+
+                                            logger->error("error al matar proceso");
                                         }
                                     }
-
-                                    if (kill(pid, SIGTERM) == 0) {
-
-                                        cout << "Cancelando job " << id << " (PID " << pid << ")..."
-                                             << endl;
-
-                                    } else {
-
-                                        perror("kill");
-                                    }
                                 }
-
                             } catch (...) {
 
                                 cout << "ID invalido." << endl;
+                            }
+                        }
+                    } else if (linea == "corriendo") {
+                        actualizarJobs();
+
+                        if (RuningJobs.empty()) {
+
+                            cout << "No hay jobs ejecutandose." << endl;
+
+                        } else {
+
+                            cout << "\nJobs activos:" << endl;
+
+                            for (const auto& job : RuningJobs) {
+
+                                cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
+                                     << " | " << "Comando: " << job.command << " | "
+                                     << "Estado: " << static_cast<int>(job.status) << endl;
+                            }
+                        }
+                    } else if (linea == "cola") {
+                        actualizarJobs();
+                        if (trabajosEnCola.empty()) {
+                            cout << "No hay Jobs en cola" << endl;
+                        } else {
+                            cout << "\nJobs en cola:" << endl;
+                            auto auxiliar = trabajosEnCola;
+
+                            while (!auxiliar.empty()) {
+                                const auto& job = auxiliar.front();
+
+                                cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
+                                     << " | " << "Comando: " << job.command << " | "
+                                     << "Estado: " << static_cast<int>(job.status) << endl;
+
+                                auxiliar.pop();
                             }
                         }
                     }
@@ -466,6 +557,23 @@ int main() {
                                 cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
                                      << " | " << "Comando: " << job.command << " | "
                                      << "Estado: " << static_cast<int>(job.status) << endl;
+                            }
+                            if (trabajosEnCola.empty()) {
+                                cout << "No hay Jobs en cola" << endl;
+                            } else {
+                                cout << "\nJobs en cola:" << endl;
+                                auto auxiliar = trabajosEnCola;
+
+                                while (!auxiliar.empty()) {
+                                    const auto& job = auxiliar.front();
+
+                                    cout << "ID: " << job.id << " | "
+                                         << "PID: " << mapaIdPid[job.id] << " | "
+                                         << "Comando: " << job.command << " | "
+                                         << "Estado: " << static_cast<int>(job.status) << endl;
+
+                                    auxiliar.pop();
+                                }
                             }
                         }
                     }
@@ -512,7 +620,6 @@ int main() {
                             nuevoJob.status = LAUNCHED;
                             correr(nuevoJob);
                         }
-
                     }
 
                     else if (linea == "correr") {
