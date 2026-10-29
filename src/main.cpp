@@ -40,7 +40,7 @@ void manejarSIGCHLD(int) {
     errno = errorAnterior;
 }
 
-bool cancelarEnCola(JobID id, sqlite3* dbConn) {
+bool cancelarEnCola(JobID id, sqlite3* dbConn,auto logger) {
     queue<Job> auxiliar;
     bool encontrado = false;
 
@@ -68,7 +68,7 @@ bool cancelarEnCola(JobID id, sqlite3* dbConn) {
     const char* sql = "UPDATE jobs SET status = ? WHERE id = ?";
 
     if (sqlite3_prepare_v2(dbConn, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        cerr << "Error preparando actualizacion: " << sqlite3_errmsg(dbConn) << endl;
+        logger -> error("Error preparando actualizacion: {}" , sqlite3_errmsg(dbConn)) ;
         return true; // Se eliminó de la cola, aunque falló SQLite.
     }
 
@@ -76,7 +76,8 @@ bool cancelarEnCola(JobID id, sqlite3* dbConn) {
     sqlite3_bind_int64(stmt, 2, id);
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
-        cerr << "Error actualizando job: " << sqlite3_errmsg(dbConn) << endl;
+
+        logger -> error("Error actualizando job:: {}" , sqlite3_errmsg(dbConn)) ;
     }
 
     sqlite3_finalize(stmt);
@@ -460,7 +461,7 @@ int main() {
                             try {
 
                                 JobID id = stoll(idTexto);
-                                if (cancelarEnCola(id, dbCOnn)) {
+                                if (cancelarEnCola(id, dbCOnn,logger)) {
                                     cout << "Job " << id << " cancelado y eliminado de la cola."
                                          << endl;
                                 } else {
@@ -649,7 +650,7 @@ int main() {
         // Detectar errores en los descriptores.
         if ((fds[0].revents & (POLLERR | POLLNVAL)) ||
             (fds[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
-            cerr << "Error en un descriptor de poll()." << endl;
+            logger->info( "Error en un descriptor de poll().") ;
             break;
         }
     }
