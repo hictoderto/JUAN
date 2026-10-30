@@ -6,6 +6,11 @@ namespace juan {
 
 // Divide un comando en argumentos, respetando comillas y escapes.
 Result<vec<str>> parse_command(str_vw command) {
+    //NewLine characters are not allowed in the command string
+    if (command.find('\n') != str_vw::npos) {
+        return std::unexpected(Status::PARSE_ERROR);
+    }
+    
     vec<str> arguments;
     str current_argument;
     char quote = '\0';             // Comilla activa, o '\0' si no hay
@@ -35,7 +40,7 @@ Result<vec<str>> parse_command(str_vw command) {
         // Espacio: termina el argumento actual
         } else if (std::isspace(static_cast<unsigned char>(character))) {
             if (argument_started) {
-                arguments.push_back(std::move(current_argument));
+                arguments.emplace_back(std::move(current_argument));
                 current_argument.clear();
                 argument_started = false;
             }
@@ -53,7 +58,7 @@ Result<vec<str>> parse_command(str_vw command) {
 
     // Último argumento
     if (argument_started) {
-        arguments.push_back(std::move(current_argument));
+        arguments.emplace_back(std::move(current_argument));
     }
 
     return arguments;

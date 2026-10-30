@@ -71,6 +71,11 @@ TEST(CommandParserTest, PreservesQuotedAndEscapedSpaces) {
 	EXPECT_EQ((*parsed)[1], "hello world");
 	EXPECT_EQ((*parsed)[2], "from JUAN");
 	EXPECT_EQ((*parsed)[3], "escaped value");
+
+    auto with_tab = parse_command("echo 'a\tb'");
+	ASSERT_TRUE(with_tab.has_value());
+	ASSERT_EQ(with_tab->size(), 2);
+	EXPECT_EQ((*with_tab)[1], "a\tb");
 }
 
 TEST(CommandParserTest, PreservesEmptyQuotedArgumentsAndEmptyInput) {
@@ -88,4 +93,9 @@ TEST(CommandParserTest, PreservesEmptyQuotedArgumentsAndEmptyInput) {
 TEST(CommandParserTest, RejectsUnclosedQuotesAndTrailingEscape) {
 	EXPECT_EQ(parse_command("echo 'unfinished").error(), Status::PARSE_ERROR);
 	EXPECT_EQ(parse_command("echo trailing\\").error(), Status::PARSE_ERROR);
+    EXPECT_EQ(parse_command("echo hello\nworld").error(), Status::PARSE_ERROR);   
+	EXPECT_EQ(parse_command("echo hello\n").error(), Status::PARSE_ERROR);        
+    EXPECT_EQ(parse_command("echo 'hello\nworld'").error(), Status::PARSE_ERROR); 
+	EXPECT_EQ(parse_command("echo \"hello\nworld\"").error(), Status::PARSE_ERROR);
+	EXPECT_EQ(parse_command("echo escaped\\\nvalue").error(), Status::PARSE_ERROR);
 }
