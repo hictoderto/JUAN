@@ -401,8 +401,8 @@ int main() {
 						}
 
 						else if (child == 0) {
-                            string logFileNameOut = "job_output_" + to_string(id) + ".log";
-                            string logFileNameErr = "job_error_" + to_string(id) + ".log";
+                            string logFileNameOut = "job_output.log";
+                            string logFileNameErr = "job_error_output.log";
 
                             // Inicializamos el archivo de salida para stdout y stderr
 							int salida_out = open(logFileNameOut.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
