@@ -19,6 +19,7 @@
 
 #include <juan_session.h>
 #include <logger.h>
+#include <timestamp.h>
 
 using namespace juan;
 using namespace std;
@@ -38,6 +39,165 @@ void manejarSIGCHLD(int) {
     (void)write(sigchld_pipe[1], &byte, 1);
 
     errno = errorAnterior;
+}
+
+// Cambia el estado de un Job a su representación en string.
+const char* Jobs_status_str(JobStatus status) {
+    switch (status) {
+        case QUEUED:
+            return "En cola";
+        case LAUNCHED:
+            return "Lanzado";
+        case RUNNING:
+            return "Ejecutandose";
+        case SUCCEDED:
+            return "Exitoso";
+        case REJECTED:
+            return "Rechazado";
+        case CANCELING:
+            return "Cancelando";
+        case CANCELED:
+            return "Cancelado";
+        case FAILED:
+            return "Fallido";
+        default:
+            return "Desconocido";
+    }
+}
+
+// Guarda el lanzamiento de un Job en la base de datos.
+bool guardarLanzamiento(sqlite3* dbConn, JobID id,
+                        const shared_ptr<Logger>& logger) {
+    const char* sql =
+        "UPDATE jobs SET status = ?, launched_at = ? WHERE id = ?";
+
+    sqlite3_stmt* stmt = nullptr;
+    int rc = sqlite3_prepare_v2(dbConn, sql, -1, &stmt, nullptr);
+
+    if (rc != SQLITE_OK) {
+        logger->error("Error preparando lanzamiento: {}", sqlite3_errmsg(dbConn));
+        return false;
+    }
+
+    rc = sqlite3_bind_int(stmt, 1, LAUNCHED);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt, 2, Timestamp::now().as_s64());
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt, 3, id);
+
+    if (rc == SQLITE_OK)
+        rc = sqlite3_step(stmt);
+
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        logger->error("Error guardando lanzamiento: {}", sqlite3_errmsg(dbConn));
+        return false;
+    }
+
+    return true;
+}
+
+// Guarda la finalización de un Job en la base de datos.
+bool guardarFinalizacion(sqlite3* dbConn, JobID id, JobStatus status,
+                         bool tieneCodigoSalida, int codigoSalida,
+                         const shared_ptr<Logger>& logger) {
+    const char* sql =
+        "UPDATE jobs SET status = ?, finished_at = ?, result = ? WHERE id = ?";
+
+    sqlite3_stmt* stmt = nullptr;
+    int rc = sqlite3_prepare_v2(dbConn, sql, -1, &stmt, nullptr);
+
+    if (rc != SQLITE_OK) {
+        logger->error("Error preparando finalizacion: {}", sqlite3_errmsg(dbConn));
+        return false;
+    }
+
+    rc = sqlite3_bind_int(stmt, 1, status);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt, 2, Timestamp::now().as_s64());
+    if (rc == SQLITE_OK) {
+        rc = tieneCodigoSalida
+            ? sqlite3_bind_int(stmt, 3, codigoSalida)
+            : sqlite3_bind_null(stmt, 3);
+    }
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt, 4, id);
+
+    if (rc == SQLITE_OK)
+        rc = sqlite3_step(stmt);
+
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        logger->error("Error guardando finalizacion: {}", sqlite3_errmsg(dbConn));
+        return false;
+    }
+
+    return true;
+}
+
+void registrarResultadoProceso(Job& job, int estado, sqlite3* dbConn,
+                               const shared_ptr<Logger>& logger) {
+    bool tieneCodigoSalida = false;
+    int codigoSalida = 0;
+
+    if (WIFEXITED(estado)) {
+        codigoSalida = WEXITSTATUS(estado);
+        tieneCodigoSalida = true;
+        job.result = static_cast<u8>(codigoSalida);
+        job.status = (codigoSalida == 0) ? SUCCEDED : FAILED;
+    } else if (WIFSIGNALED(estado)) {
+        job.status = (job.status == CANCELING) ? CANCELED : FAILED;
+        job.result.reset();
+    } else {
+        job.status = FAILED;
+        job.result.reset();
+    }
+
+    guardarFinalizacion(dbConn, job.id, job.status, tieneCodigoSalida,
+                        codigoSalida, logger);
+}
+
+bool revisarJobsInconclusos(sqlite3* dbConn, const shared_ptr<Logger>& logger) {
+    const char* sql = "SELECT id, command FROM jobs WHERE status = ?";
+    sqlite3_stmt* stmt = nullptr;
+
+    int rc = sqlite3_prepare_v2(dbConn, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        logger->error("Error preparando busqueda de jobs inconclusos: {}",
+                      sqlite3_errmsg(dbConn));
+        return false;
+    }
+
+    rc = sqlite3_bind_int(stmt, 1, LAUNCHED);
+    if (rc != SQLITE_OK) {
+        logger->error("Error buscando jobs inconclusos: {}", sqlite3_errmsg(dbConn));
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        JobID id = sqlite3_column_int64(stmt, 0);
+        const auto* command_text = sqlite3_column_text(stmt, 1);
+        string command = command_text
+            ? reinterpret_cast<const char*>(command_text)
+            : "(comando no disponible)";
+
+        logger->warn(
+            "El job {} ({}) quedo en estado LAUNCHED; no se registro su finalizacion "
+            "y el proceso pudo interrumpirse en la ejecucion anterior.",
+            id, command);
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        logger->error("Error leyendo jobs inconclusos: {}", sqlite3_errmsg(dbConn));
+        return false;
+    }
+
+    return true;
 }
 
 bool cancelarEnCola(JobID id, sqlite3* dbConn, auto logger) {
@@ -65,18 +225,23 @@ bool cancelarEnCola(JobID id, sqlite3* dbConn, auto logger) {
     // Actualizar el estado del job cancelado en SQLite.
     sqlite3_stmt* stmt = nullptr;
 
-    const char* sql = "UPDATE jobs SET status = ? WHERE id = ?";
+    const char* sql =
+        "UPDATE jobs SET status = ?, finished_at = ?, result = NULL WHERE id = ?";
 
     if (sqlite3_prepare_v2(dbConn, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         logger->error("Error preparando actualizacion: {}", sqlite3_errmsg(dbConn));
         return true; // Se eliminó de la cola, aunque falló SQLite.
     }
 
-    sqlite3_bind_int(stmt, 1, CANCELED);
-    sqlite3_bind_int64(stmt, 2, id);
+    int rc = sqlite3_bind_int(stmt, 1, CANCELED);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt, 2, Timestamp::now().as_s64());
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt, 3, id);
 
-    if (sqlite3_step(stmt) != SQLITE_DONE) {
-
+    if (rc == SQLITE_OK)
+        rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
         logger->error("Error actualizando job:: {}", sqlite3_errmsg(dbConn));
     }
 
@@ -85,13 +250,13 @@ bool cancelarEnCola(JobID id, sqlite3* dbConn, auto logger) {
     return true;
 }
 
-void correr(Job nuevoJob) {
+void correr(Job nuevoJob, sqlite3* dbConn, const shared_ptr<Logger>& logger) {
     pid_t child = fork();
 
     if (child == -1) {
-
-        cout << "Error al crear " << "el proceso." << endl;
-
+        cout << "Error al crear el proceso." << endl;
+        logger->error("fork fallo para el job {}: {}", nuevoJob.id, errno);
+        guardarFinalizacion(dbConn, nuevoJob.id, FAILED, false, 0, logger);
     }
 
     else if (child == 0) {
@@ -127,6 +292,10 @@ void correr(Job nuevoJob) {
 
     else {
 
+        nuevoJob.status = LAUNCHED;
+
+        guardarLanzamiento(dbConn, nuevoJob.id, logger);
+
         RuningJobs.push_back(nuevoJob);
 
         mapaIdPid[nuevoJob.id] = child;
@@ -141,7 +310,7 @@ void correr(Job nuevoJob) {
     }
 }
 
-void actualizarJobs() {
+void actualizarJobs(sqlite3* dbConn, const shared_ptr<Logger>& logger) {
 
     for (auto it = RuningJobs.begin(); it != RuningJobs.end();) {
 
@@ -174,36 +343,12 @@ void actualizarJobs() {
             cout << "Comando: " << it->command << endl;
 
             if (WIFEXITED(estado)) {
-
-                int codigo = WEXITSTATUS(estado);
-
-                cout << "Codigo: " << codigo << endl;
-
-                it->result = codigo;
-
-                if (codigo == 0) {
-                    it->status = SUCCEDED;
-                } else {
-                    it->status = FAILED;
-                }
-
+                cout << "Codigo: " << WEXITSTATUS(estado) << endl;
             } else if (WIFSIGNALED(estado)) {
-
                 cout << "Terminado por senal: " << WTERMSIG(estado) << endl;
-
-                if (it->status == CANCELING) {
-                    it->status = CANCELED;
-                } else {
-                    it->status = FAILED;
-                }
             }
 
-            else if (WIFSIGNALED(estado)) {
-
-                cout << "Terminado por senal: " << WTERMSIG(estado) << endl;
-
-                it->status = CANCELED;
-            }
+            registrarResultadoProceso(*it, estado, dbConn, logger);
 
             mapaIdPid.erase(mapaIt);
 
@@ -212,7 +357,7 @@ void actualizarJobs() {
                 Job siguiente = trabajosEnCola.front();
                 trabajosEnCola.pop();
 
-                correr(siguiente);
+                correr(siguiente, dbConn, logger);
             }
 
             cout << "JUAN> " << flush;
@@ -280,18 +425,24 @@ int main() {
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 
+    if (!revisarJobsInconclusos(dbCOnn, logger)) {
+        return 1;
+    }
+
     sqlite3_stmt* insert_job_stmt;
 
     sqlite3_prepare_v2(dbCOnn,
                        "INSERT INTO jobs "
-                       "(id,command,status) "
-                       "VALUES (NULL,:cmd,:st) "
+                       "(id,command,status,queued_at) "
+                       "VALUES (NULL,:cmd,:st,:queued_at) "
                        "RETURNING id",
                        -1, &insert_job_stmt, nullptr);
 
     auto cmd_idx = sqlite3_bind_parameter_index(insert_job_stmt, ":cmd");
 
     auto st_idx = sqlite3_bind_parameter_index(insert_job_stmt, ":st");
+
+    auto queued_at_idx = sqlite3_bind_parameter_index(insert_job_stmt, ":queued_at");
 
     auto get_id = [&](const string& cmd, s8 status) {
         int bind_res;
@@ -309,6 +460,13 @@ int main() {
         if (bind_res != SQLITE_OK) {
 
             logger->error("error binding st {}", sqlite3_errmsg(dbCOnn));
+        }
+
+        bind_res = sqlite3_bind_int64(insert_job_stmt, queued_at_idx,
+                                      Timestamp::now().as_s64());
+
+        if (bind_res != SQLITE_OK) {
+            logger->error("error binding queued_at {}", sqlite3_errmsg(dbCOnn));
         }
 
         auto ret = sqlite3_step(insert_job_stmt);
@@ -384,7 +542,7 @@ int main() {
             }
 
             // Consultar los procesos que realmente terminaron.
-            actualizarJobs();
+            actualizarJobs(dbCOnn, logger);
         }
 
         // Evento 2: hay entrada en la terminal.
@@ -408,10 +566,25 @@ int main() {
                         cout << "\nCerrando JUAN..." << endl;
 
                         for (auto& job : RuningJobs) {
+                            auto mapaIt = mapaIdPid.find(job.id);
+                            if (mapaIt == mapaIdPid.end()) {
+                                continue;
+                            }
 
-                            cout << "Esperando PID " << mapaIdPid[job.id] << "..." << endl;
+                            pid_t pid = mapaIt->second;
+                            int estado = 0;
+                            cout << "Esperando PID " << pid << "..." << endl;
 
-                            waitpid(mapaIdPid[job.id], nullptr, 0);
+                            pid_t resultado;
+                            do {
+                                resultado = waitpid(pid, &estado, 0);
+                            } while (resultado == -1 && errno == EINTR);
+
+                            if (resultado == pid) {
+                                registrarResultadoProceso(job, estado, dbCOnn, logger);
+                            } else {
+                                logger->error("Error esperando el proceso {}: {}", pid, errno);
+                            }
                         }
 
                         return 0;
@@ -440,7 +613,7 @@ int main() {
 
                     else if (linea == "status") {
 
-                        actualizarJobs();
+                        actualizarJobs(dbCOnn, logger);
 
                         cout << "JUAN funcionando..." << endl;
 
@@ -504,7 +677,7 @@ int main() {
                             }
                         }
                     } else if (linea == "corriendo") {
-                        actualizarJobs();
+                        actualizarJobs(dbCOnn, logger);
 
                         if (RuningJobs.empty()) {
 
@@ -518,11 +691,11 @@ int main() {
 
                                 cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
                                      << " | " << "Comando: " << job.command << " | "
-                                     << "Estado: " << Jobs_tatus_str(job.status) << endl;
+                                     << "Estado: " << Jobs_status_str(job.status) << endl;
                             }
                         }
                     } else if (linea == "cola") {
-                        actualizarJobs();
+                        actualizarJobs(dbCOnn, logger);
                         if (trabajosEnCola.empty()) {
                             cout << "No hay Jobs en cola" << endl;
                         } else {
@@ -534,7 +707,7 @@ int main() {
 
                                 cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
                                      << " | " << "Comando: " << job.command << " | "
-                                     << "Estado: " << Jobs_tatus_str(job.status) << endl;
+                                     << "Estado: " << Jobs_status_str(job.status) << endl;
 
                                 auxiliar.pop();
                             }
@@ -543,7 +716,7 @@ int main() {
 
                     else if (linea == "jobs") {
 
-                        actualizarJobs();
+                        actualizarJobs(dbCOnn, logger);
 
                         if (RuningJobs.empty()) {
 
@@ -557,7 +730,7 @@ int main() {
 
                                 cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
                                      << " | " << "Comando: " << job.command << " | "
-                                     << "Estado: " << Jobs_tatus_str(job.status) << endl;
+                                     << "Estado: " << Jobs_status_str(job.status) << endl;
                             }
                             if (trabajosEnCola.empty()) {
                                 cout << "No hay Jobs en cola" << endl;
@@ -571,7 +744,7 @@ int main() {
                                     cout << "ID: " << job.id << " | "
                                          << "PID: " << mapaIdPid[job.id] << " | "
                                          << "Comando: " << job.command << " | "
-                                         << "Estado: " << Jobs_tatus_str(job.status) << endl;
+                                         << "Estado: " << Jobs_status_str(job.status) << endl;
 
                                     auxiliar.pop();
                                 }
@@ -613,13 +786,13 @@ int main() {
 
                         else {
 
-                            JobID id = get_id(comando, LAUNCHED);
+                            JobID id = get_id(comando, QUEUED);
                             Job nuevoJob;
 
                             nuevoJob.id = id;
                             nuevoJob.command = comando;
-                            nuevoJob.status = LAUNCHED;
-                            correr(nuevoJob);
+                            nuevoJob.status = QUEUED;
+                            correr(nuevoJob, dbCOnn, logger);
                         }
                     }
 

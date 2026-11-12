@@ -1,0 +1,123 @@
+Herramienta utilizada: Copilot SDK en VS Code
+Tipo de resultado: Persistencia de estados y deteccion de trabajos inconclusos
+Responsable: Nicolas Tadeo Caceres Panuco
+
+Objetivo:
+Registrar en SQLite las fechas y cambios de estado de los trabajos durante su
+ejecucion. Ademas, al iniciar JUAN, detectar trabajos que quedaron con estado
+LAUNCHED y escribir una advertencia en el log. No se implementa ejecucion remota
+por SSH.
+
+Resultado obtenido:
+Se actualizaron los cambios en src/main.cpp para guardar queued_at al crear un
+trabajo, launched_at cuando fork() crea el proceso, y finished_at cuando termina
+o se cancela un trabajo. Se guarda en result el codigo de salida normal; cuando
+el proceso termina por senal, result queda en NULL.
+
+Implementacion:
+
+1. Alta del trabajo y fecha de creacion
+
+La insercion incluye queued_at como parametro:
+
+    sqlite3_prepare_v2(dbCOnn,
+                       "INSERT INTO jobs "
+                       "(id,command,status,queued_at) "
+                       "VALUES (NULL,:cmd,:st,:queued_at) "
+                       "RETURNING id",
+                       -1, &insert_job_stmt, nullptr);
+
+Dentro de get_id se enlaza el estado inicial QUEUED (el argumento status se
+recibe como QUEUED en las llamadas) y la fecha actual:
+
+    bind_res = sqlite3_bind_int64(insert_job_stmt, st_idx, status);
+    bind_res = sqlite3_bind_int64(insert_job_stmt, queued_at_idx,
+                                  Timestamp::now().as_s64());
+
+Los tiempos se guardan como milisegundos desde Unix epoch, usando la clase
+Timestamp existente.
+
+2. Cambio a LAUNCHED
+
+Solo después de que fork() crea correctamente el proceso, se actualiza el estado
+y la fecha de lanzamiento:
+
+    const char* sql =
+        "UPDATE jobs SET status = ?, launched_at = ? WHERE id = ?";
+
+    rc = sqlite3_bind_int(stmt, 1, LAUNCHED);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt, 2, Timestamp::now().as_s64());
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt, 3, id);
+
+Si fork() falla, el trabajo se marca FAILED y se registra finished_at; no se
+queda como QUEUED o LAUNCHED sin una ejecucion.
+
+3. Estado final y result
+
+El estado final se determina con el resultado de waitpid():
+
+    if (WIFEXITED(estado)) {
+        codigoSalida = WEXITSTATUS(estado);
+        tieneCodigoSalida = true;
+        job.result = static_cast<u8>(codigoSalida);
+        job.status = (codigoSalida == 0) ? SUCCEDED : FAILED;
+    } else if (WIFSIGNALED(estado)) {
+        job.status = (job.status == CANCELING) ? CANCELED : FAILED;
+        job.result.reset();
+    } else {
+        job.status = FAILED;
+        job.result.reset();
+    }
+
+La actualizacion persiste el estado final, finished_at y result:
+
+    const char* sql =
+        "UPDATE jobs SET status = ?, finished_at = ?, result = ? WHERE id = ?";
+
+En una terminacion normal, result contiene el codigo de salida. En una
+terminacion por senal, result se almacena como NULL. Esta misma funcion de
+finalizacion se usa tanto al detectar el termino durante la operacion normal
+como al esperar trabajos al ejecutar salir.
+
+4. Cancelacion antes del lanzamiento
+
+Al cancelar un trabajo que aun esta en la cola, se guarda CANCELED,
+finished_at y result = NULL:
+
+    const char* sql =
+        "UPDATE jobs SET status = ?, finished_at = ?, result = NULL WHERE id = ?";
+
+Este trabajo no recibe launched_at porque nunca se ejecuto.
+
+5. Busqueda de trabajos inconclusos al iniciar
+
+Despues de crear/verificar la tabla jobs, JUAN busca registros que sigan en
+LAUNCHED:
+
+    const char* sql = "SELECT id, command FROM jobs WHERE status = ?";
+    sqlite3_bind_int(stmt, 1, LAUNCHED);
+
+Por cada resultado escribe una advertencia en juan_log indicando el ID, el
+comando, que no se registro la finalizacion y que el proceso pudo interrumpirse
+en la ejecucion anterior. El estado se conserva como LAUNCHED para no afirmar
+un resultado que JUAN no observo. Como el PID no se persiste, JUAN no puede
+comprobar si el proceso anterior sigue activo ni controlarlo.
+
+Verificacion realizada:
+
+    cmake --build build -j2
+
+La compilacion termino correctamente.
+
+    ./build/JuanTests
+
+Las 7 pruebas existentes terminaron correctamente. CTest no encontro pruebas
+registradas en el directorio build; por eso se ejecuto directamente el binario
+de pruebas JuanTests.
+
+Resultado final:
+El flujo local persiste la creacion, el lanzamiento y la finalizacion de los
+trabajos, y registra advertencias para trabajos que quedaron en LAUNCHED tras
+una ejecucion anterior. La implementacion no agrega SSH ni ejecucion remota.
