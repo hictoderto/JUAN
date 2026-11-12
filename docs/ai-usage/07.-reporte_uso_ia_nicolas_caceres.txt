@@ -1,0 +1,74 @@
+Herramienta utilizada: Claude.ai
+Tipo de resultado: Modificacion de Validador de strings
+Responsable: Nicolas Tadeo Caceres Panuco
+
+Objetivo:
+Aplicar modificaciones al validador de strings para los comandos, donde se solicito modificar el uso de push_back(move()) por emplace_back(move()), ademas de agregar
+validaciones para evitar el uso de newlines '\n'.
+
+Resultado obtenido:
+Se obtuvieron 3 modificaciones una para validador.cpp y 2 para las pruebas unitarias en test_juan.cpp.
+
+Implementacion propuesta de la siguiente manera:
+
+--- Codigo implementado en validador.cpp
+
+#include <validador.h>
+#include <cctype>
+
+namespace juan {
+
+// Divide un comando en argumentos, respetando comillas y escapes.
+// No existe forma de ingresar un salto de línea: cualquier '\n' es un error.
+Result<vec<str>> parse_command(str_vw command) {
+    // Un newline es inválido en cualquier posición (entre argumentos,
+    // dentro de comillas, o tras una barra invertida).
+    if (command.find('\n') != str_vw::npos) {
+        return std::unexpected(Status::PARSE_ERROR);
+    }
+
+    vec<str> arguments;
+    str current_argument;
+    char quote = '\0';             // Comilla activa, o '\0' si no hay
+    bool argument_started = false; // Permite argumentos vacíos como ""
+
+    // ... el resto de tu función queda exactamente igual ...
+}
+
+} // namespace juan
+
+--- Codigos implementados en test_juan.cpp
+TEST(CommandParserTest, PreservesQuotedAndEscapedSpaces) {
+	auto parsed = parse_command("echo 'hello world' \"from JUAN\" escaped\\ value");
+
+    //codigo anterior a la implementación...
+
+    // Un tab dentro de comillas se conserva (solo el newline es inválido)
+	auto with_tab = parse_command("echo 'a\tb'");
+	ASSERT_TRUE(with_tab.has_value());
+	ASSERT_EQ(with_tab->size(), 2);
+	EXPECT_EQ((*with_tab)[1], "a\tb");
+}
+
+TEST(CommandParserTest, RejectsUnclosedQuotesAndTrailingEscape) {
+
+    //codigo anterior a la implementación...
+
+    EXPECT_EQ(parse_command("echo hello\nworld").error(), Status::PARSE_ERROR);   // entre argumentos
+	EXPECT_EQ(parse_command("echo hello\n").error(), Status::PARSE_ERROR);        // al final
+	EXPECT_EQ(parse_command("echo 'hello\nworld'").error(), Status::PARSE_ERROR); // comillas simples
+	EXPECT_EQ(parse_command("echo \"hello\nworld\"").error(), Status::PARSE_ERROR); // comillas dobles
+	EXPECT_EQ(parse_command("echo escaped\\\nvalue").error(), Status::PARSE_ERROR); // '\' + newline
+}
+
+Funcionamiento:
+La validacion busca que no se encuentre ningun '\n' dentro dle comando antes de siquiera inicializarlo y lo rechaza sin importar en que parte se encuentre las
+pruebas implementadas, cubren cada posición ademas de asegurarnos que si valide tabs '\t'
+
+Verificacion realizada:
+Claude compiló de forma aislada (g++ -std=c++23) una copia de `parse_command` con el cambio propuesto. En esa prueba, `echo hello\nworld` devolvió `PARSE_ERROR`
+y `echo 'a\tb'` devolvió dos argumentos (`echo` y `a\tb`).
+
+Resultado final:
+La respuesta de Claude fue implementada para el rechazo de newlines en 'parse_command', modificando y adaptandola a la estructura del parser y las pruebas unitarias,
+permitiendo incorporar al sistema el requisito que hacia falta.

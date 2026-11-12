@@ -36,8 +36,7 @@ target_include_directories(JuanTests PRIVATE inc)
 endif()
 
 
-add_executable(juan src/main.cpp src/database.cpp src/result.cpp src/logger.cpp src/timestamp.cpp src/juan_session.cpp)
+add_executable(juan src/main.cpp src/database.cpp src/result.cpp src/logger.cpp src/timestamp.cpp src/juan_session.cpp src/validador.cpp)
 target_compile_options(juan PUBLIC -Wall -Wextra -pedantic)
 target_link_libraries(juan PRIVATE sqlite3)
 target_include_directories(juan PRIVATE inc)
-
