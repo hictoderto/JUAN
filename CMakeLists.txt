@@ -28,7 +28,7 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 include(GoogleTest)
 
-add_executable(JuanTests src/tests/test_juan.cpp src/timestamp.cpp src/validador.cpp)
+add_executable(JuanTests src/tests/test_juan.cpp src/timestamp.cpp )
 target_link_libraries(JuanTests GTest::gtest_main)
 target_compile_options(JuanTests PUBLIC -Wall -Wextra -pedantic)
 target_include_directories(JuanTests PRIVATE inc)
