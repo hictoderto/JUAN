@@ -28,7 +28,7 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 include(GoogleTest)
 
-add_executable(JuanTests src/tests/test_juan.cpp src/timestamp.cpp src/validador.cpp)
+add_executable(JuanTests src/tests/test_juan.cpp src/timestamp.cpp src/parser.cpp)
 target_link_libraries(JuanTests GTest::gtest_main)
 target_compile_options(JuanTests PUBLIC -Wall -Wextra -pedantic)
 target_include_directories(JuanTests PRIVATE inc)
@@ -36,7 +36,7 @@ target_include_directories(JuanTests PRIVATE inc)
 endif()
 
 
-add_executable(juan src/main.cpp src/database.cpp src/result.cpp src/logger.cpp src/timestamp.cpp src/juan_session.cpp src/validador.cpp)
+add_executable(juan src/main.cpp src/database.cpp src/result.cpp src/logger.cpp src/timestamp.cpp src/juan_session.cpp src/parser.cpp)
 target_compile_options(juan PUBLIC -Wall -Wextra -pedantic)
 target_link_libraries(juan PRIVATE sqlite3)
 target_include_directories(juan PRIVATE inc)
