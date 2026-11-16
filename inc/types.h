@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 #include <memory>
-
+#include <string>
 namespace juan {
 using s8        = std::int8_t;
 using u8        = std::uint8_t;
@@ -22,5 +22,10 @@ using path                      = std::filesystem::path;
 using std::shared_ptr;
 using str_vw = std::string_view;
 
+struct ClienteTCP {
+    std::string entrada;
+    std::string salida;
+    bool cerrarDespuesDeEnviar = false;
+};
 } // namespace juan
 #endif /* ifndef JUAN_TYPES_H */

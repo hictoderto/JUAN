@@ -3,6 +3,7 @@
 #include "result.h"
 
 #include <algorithm>
+#include <arpa/inet.h>
 #include <chrono>
 #include <climits>
 #include <cstdint>
@@ -10,28 +11,35 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <functional>
 #include <iostream>
+#include <juan_session.h>
+#include <logger.h>
 #include <map>
+#include <netinet/in.h>
 #include <queue>
+#include <readline/history.h>
+#include <readline/readline.h>
 #include <signal.h>
 #include <sqlite3.h>
 #include <string>
 #include <sys/epoll.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <types.h>
 #include <unistd.h>
-#include <vector>
-
-#include <juan_session.h>
-#include <logger.h>
+#include <unordered_map>
 
 using namespace juan;
 using namespace std;
 const int MAX_JOBS = 5;
 const int MAX_COLA = 5;
 using Reloj = std::chrono::steady_clock;
+void mostrarMensajeRed(const string& mensaje);
 
 map<JobID, Reloj::time_point> plazosCancelacion;
+
+unordered_map<int, ClienteTCP> clientes;
 
 const int TIMEOUT_CANCELACION_MS = 5000;
 
@@ -39,6 +47,27 @@ queue<Job> trabajosEnCola;
 vector<Job> RuningJobs;
 map<JobID, pid_t> mapaIdPid;
 int sigchld_pipe[2];
+
+queue<string> comandosTerminal;
+bool finEntradaTerminal = false;
+bool procesandoComandoTerminal = false;
+
+// Readline entrega las líneas completas a esta función.
+void recibirLinea(char* texto) {
+    if (texto == nullptr) {
+        finEntradaTerminal = true;
+        return;
+    }
+
+    string comando(texto);
+
+    if (!comando.empty()) {
+        add_history(texto);
+        comandosTerminal.push(comando);
+    }
+
+    free(texto);
+}
 
 void manejarSIGCHLD(int) {
     int errorAnterior = errno;
@@ -71,6 +100,48 @@ int calcularTimeout() {
 
     return static_cast<int>(std::min<long long>(restante, INT_MAX));
 }
+
+int crearServidor(int puerto, auto logger) {
+
+    int servidor = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+
+    if (servidor == -1) {
+        logger->error("Error creando socket");
+        return -1;
+    }
+
+    int opt = 1;
+
+    if (setsockopt(servidor, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
+
+        logger->error("setsockopt");
+        close(servidor);
+        return -1;
+    }
+
+    sockaddr_in direccion{};
+
+    direccion.sin_family = AF_INET;
+    direccion.sin_addr.s_addr = INADDR_ANY;
+    direccion.sin_port = htons(puerto);
+
+    if (bind(servidor, reinterpret_cast<sockaddr*>(&direccion), sizeof(direccion)) == -1) {
+
+        logger->error("Error en bind");
+        close(servidor);
+        return -1;
+    }
+
+    if (listen(servidor, SOMAXCONN) == -1) {
+
+        logger->error("Error en listen");
+        close(servidor);
+        return -1;
+    }
+
+    return servidor;
+}
+
 void revisarCancelaciones(auto logger) {
     auto ahora = Reloj::now();
 
@@ -88,7 +159,7 @@ void revisarCancelaciones(auto logger) {
             pid_t pid = pidIt->second;
 
             if (kill(pid, SIGKILL) == 0) {
-                cout << "\n[TIMEOUT] Job " << id << ": se envio SIGKILL." << endl;
+                mostrarMensajeRed("[TIMEOUT] Job " + to_string(id) + ": se envio SIGKILL.");
             } else if (errno != ESRCH) {
                 logger->error("error en kill SIGKILL");
             }
@@ -147,9 +218,8 @@ void correr(Job nuevoJob, auto logger) {
     pid_t child = fork();
 
     if (child == -1) {
-
-        cout << "Error al crear " << "el proceso." << endl;
-
+        logger->error("Error al crear el proceso: {}", strerror(errno));
+        return;
     }
 
     else if (child == 0) {
@@ -189,13 +259,8 @@ void correr(Job nuevoJob, auto logger) {
 
         mapaIdPid[nuevoJob.id] = child;
 
-        cout << "Job creado." << endl;
-
-        cout << "PID: " << child << endl;
-
-        cout << "job id: " << nuevoJob.id << endl;
-
-        cout << "Jobs activos: " << RuningJobs.size() << "/" << MAX_JOBS << endl;
+        logger->info("Job creado. ID: {} | PID: {} | Jobs activos: {}/{}", nuevoJob.id, child,
+                     RuningJobs.size(), MAX_JOBS);
     }
 }
 
@@ -234,15 +299,13 @@ void actualizarJobs(auto logger) {
             it->status = FAILED;
             it->result = -1;
         } else {
-            cout << "\n[JOB TERMINADO]" << endl;
-            cout << "ID: " << it->id << endl;
-            cout << "PID: " << pid << endl;
-            cout << "Comando: " << it->command << endl;
+            mostrarMensajeRed("[JOB TERMINADO] ID: " + to_string(it->id) +
+                              " | PID: " + to_string(pid) + " | Comando: " + it->command);
 
             if (WIFEXITED(estado)) {
                 int codigo = WEXITSTATUS(estado);
 
-                cout << "Codigo: " << codigo << endl;
+                mostrarMensajeRed("Codigo: " + to_string(codigo));
 
                 it->result = codigo;
                 it->status = (codigo == 0) ? SUCCEDED : FAILED;
@@ -250,7 +313,7 @@ void actualizarJobs(auto logger) {
             } else if (WIFSIGNALED(estado)) {
                 int senal = WTERMSIG(estado);
 
-                cout << "Terminado por senal: " << senal << endl;
+                mostrarMensajeRed("Terminado por senal: " + to_string(senal));
 
                 it->result = -senal;
                 it->status = (it->status == CANCELING) ? CANCELED : FAILED;
@@ -272,13 +335,358 @@ void actualizarJobs(auto logger) {
             trabajosPorIniciar.push_back(trabajosEnCola.front());
             trabajosEnCola.pop();
         }
-
-        cout << "JUAN> " << flush;
     }
 
     // Ya terminó el recorrido del vector. Ahora es seguro hacer push_back.
     for (const auto& siguiente : trabajosPorIniciar) {
         correr(siguiente, logger);
+    }
+}
+
+JobID registrarJobRed(sqlite3* dbConn, const string& comando, s8 estado) {
+
+    sqlite3_stmt* stmt = nullptr;
+
+    const char* sql = "INSERT INTO jobs (command, status) VALUES (?, ?)";
+
+    if (sqlite3_prepare_v2(dbConn, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+
+        return -1;
+    }
+
+    sqlite3_bind_text(stmt, 1, comando.c_str(), -1, SQLITE_TRANSIENT);
+
+    sqlite3_bind_int(stmt, 2, estado);
+
+    JobID id = -1;
+
+    if (sqlite3_step(stmt) == SQLITE_DONE) {
+        id = static_cast<JobID>(sqlite3_last_insert_rowid(dbConn));
+    }
+
+    sqlite3_finalize(stmt);
+
+    return id;
+}
+
+string procesarComandoRed(const string& comando, sqlite3* dbConn, auto logger) {
+
+    // ==========================================
+    // AYUDA
+    // ==========================================
+    if (comando == "ayuda" || comando == "help") {
+
+        return "Comandos disponibles:\n"
+               "  ayuda          - Mostrar ayuda\n"
+               "  status         - Mostrar estados de JUAN\n"
+               "  correr <cmd>   - Ejecutar comando Linux\n"
+               "  cancelar <id>  - Cancelar un job\n"
+               "  corriendo      - Mostrar jobs activos\n"
+               "  cola           - Mostrar jobs en cola\n"
+               "  jobs           - Mostrar todos los jobs\n"
+               "  salir          - Cerrar esta conexion";
+    }
+
+    // ==========================================
+    // STATUS
+    // ==========================================
+    if (comando == "status") {
+        actualizarJobs(logger);
+
+        string respuesta;
+        respuesta += "JUAN funcionando...\n";
+
+        respuesta += "Clientes conectados: " + to_string(clientes.size()) + "\n";
+
+        respuesta +=
+            "Jobs activos: " + to_string(RuningJobs.size()) + "/" + to_string(MAX_JOBS) + "\n";
+
+        respuesta +=
+            "Jobs en cola: " + to_string(trabajosEnCola.size()) + "/" + to_string(MAX_COLA);
+
+        return respuesta;
+    }
+
+    // ==========================================
+    // CANCELAR
+    // ==========================================
+    if (comando.rfind("cancelar ", 0) == 0) {
+
+        string idTexto = comando.substr(9);
+
+        if (idTexto.empty()) {
+            return "Debes indicar el ID del job.";
+        }
+
+        try {
+
+            size_t posicion = 0;
+            JobID id = stoll(idTexto, &posicion);
+
+            if (posicion != idTexto.size() || id < 0) {
+                return "ID invalido.";
+            }
+
+            // Primero comprobar si el job está en cola.
+            if (cancelarEnCola(id, dbConn, logger)) {
+
+                return "Job " + to_string(id) + " cancelado y eliminado de la cola.";
+            }
+
+            // Si no está en cola, buscarlo entre los activos.
+            auto it = mapaIdPid.find(id);
+
+            if (it == mapaIdPid.end()) {
+
+                return "No existe un job con ID " + to_string(id) + ".";
+            }
+
+            pid_t pid = it->second;
+
+            bool yaCancelando = false;
+
+            for (auto& job : RuningJobs) {
+
+                if (job.id == id) {
+
+                    if (job.status == CANCELING) {
+                        yaCancelando = true;
+                    } else {
+                        job.status = CANCELING;
+                    }
+
+                    break;
+                }
+            }
+
+            if (yaCancelando) {
+
+                return "El job " + to_string(id) + " ya tiene una cancelacion pendiente.";
+            }
+
+            if (kill(pid, SIGTERM) == 0) {
+
+                plazosCancelacion[id] =
+                    Reloj::now() + std::chrono::milliseconds(TIMEOUT_CANCELACION_MS);
+
+                return "Cancelacion solicitada para job " + to_string(id) + ". Timeout: 5000 ms.";
+            }
+
+            logger->error("Error al enviar SIGTERM: {}", strerror(errno));
+
+            return "Error al solicitar la cancelacion del job " + to_string(id) + ".";
+
+        } catch (const exception&) {
+
+            return "ID invalido.";
+        }
+    }
+
+    // ==========================================
+    // CORRIENDO
+    // ==========================================
+    if (comando == "corriendo") {
+
+        actualizarJobs(logger);
+
+        if (RuningJobs.empty()) {
+            return "No hay jobs ejecutandose.";
+        }
+
+        string respuesta = "Jobs activos:\n";
+
+        for (const auto& job : RuningJobs) {
+
+            auto it = mapaIdPid.find(job.id);
+
+            pid_t pid = (it != mapaIdPid.end()) ? it->second : -1;
+
+            respuesta += "ID: " + to_string(job.id) + " | PID: " + to_string(pid) +
+                         " | Comando: " + job.command +
+                         " | Estado: " + string(Jobs_tatus_str(job.status)) + "\n";
+        }
+
+        return respuesta;
+    }
+
+    // ==========================================
+    // COLA
+    // ==========================================
+    if (comando == "cola") {
+
+        actualizarJobs(logger);
+
+        if (trabajosEnCola.empty()) {
+            return "No hay Jobs en cola.";
+        }
+
+        string respuesta = "Jobs en cola:\n";
+
+        auto auxiliar = trabajosEnCola;
+
+        while (!auxiliar.empty()) {
+
+            const auto& job = auxiliar.front();
+
+            respuesta += "ID: " + to_string(job.id) + " | PID: --" + " | Comando: " + job.command +
+                         " | Estado: " + string(Jobs_tatus_str(job.status)) + "\n";
+
+            auxiliar.pop();
+        }
+
+        return respuesta;
+    }
+
+    // ==========================================
+    // JOBS (ACTIVOS + EN COLA)
+    // ==========================================
+    if (comando == "jobs") {
+
+        actualizarJobs(logger);
+
+        string respuesta;
+
+        // Jobs activos.
+        if (RuningJobs.empty()) {
+
+            respuesta += "No hay jobs ejecutandose.\n";
+
+        } else {
+
+            respuesta += "Jobs activos:\n";
+
+            for (const auto& job : RuningJobs) {
+
+                auto it = mapaIdPid.find(job.id);
+
+                pid_t pid = (it != mapaIdPid.end()) ? it->second : -1;
+
+                respuesta += "ID: " + to_string(job.id) + " | PID: " + to_string(pid) +
+                             " | Comando: " + job.command +
+                             " | Estado: " + string(Jobs_tatus_str(job.status)) + "\n";
+            }
+        }
+
+        // Jobs en cola.
+        if (trabajosEnCola.empty()) {
+
+            respuesta += "\nNo hay Jobs en cola.\n";
+
+        } else {
+
+            respuesta += "\nJobs en cola:\n";
+
+            auto auxiliar = trabajosEnCola;
+
+            while (!auxiliar.empty()) {
+
+                const auto& job = auxiliar.front();
+
+                respuesta += "ID: " + to_string(job.id) + " | PID: --" +
+                             " | Comando: " + job.command +
+                             " | Estado: " + string(Jobs_tatus_str(job.status)) + "\n";
+
+                auxiliar.pop();
+            }
+        }
+
+        return respuesta;
+    }
+
+    // ==========================================
+    // CORRER
+    // ==========================================
+    if (comando == "correr " || comando.rfind("correr ", 0) == 0) {
+
+        string cmd = comando.substr(7);
+
+        if (cmd.empty()) {
+            return "Debes escribir un comando despues de 'correr'.";
+        }
+
+        // Hay espacio para ejecutar inmediatamente.
+        if (RuningJobs.size() < MAX_JOBS) {
+
+            JobID id = registrarJobRed(dbConn, cmd, LAUNCHED);
+
+            if (id == -1) {
+                return "No se pudo registrar el job en SQLite.";
+            }
+
+            Job nuevoJob{};
+
+            nuevoJob.id = id;
+            nuevoJob.command = cmd;
+            nuevoJob.status = LAUNCHED;
+
+            correr(nuevoJob, logger);
+
+            return "Job creado.\nID: " + to_string(id);
+        }
+
+        // Si no hay espacio, intentar agregarlo a la cola.
+        if (trabajosEnCola.size() < MAX_COLA) {
+
+            JobID id = registrarJobRed(dbConn, cmd, QUEUED);
+
+            if (id == -1) {
+                return "No se pudo registrar el job en SQLite.";
+            }
+
+            Job nuevoJob{};
+
+            nuevoJob.id = id;
+            nuevoJob.command = cmd;
+            nuevoJob.status = QUEUED;
+
+            trabajosEnCola.push(nuevoJob);
+
+            return "Job creado en cola.\n"
+                   "ID: " +
+                   to_string(id) + "\nPosicion en cola: " + to_string(trabajosEnCola.size()) + "/" +
+                   to_string(MAX_COLA);
+        }
+
+        return "Limite de trabajos alcanzado.\n"
+               "Activos: " +
+               to_string(MAX_JOBS) + " | Cola: " + to_string(MAX_COLA);
+    }
+
+    // ==========================================
+    // SALIR
+    // ==========================================
+    if (comando == "salir" || comando == "exit") {
+        return "Cerrando conexion con JUAN...";
+    }
+
+    // ==========================================
+    // COMANDO INVALIDO
+    // ==========================================
+    return "Comando invalido. Escribe 'ayuda' para ver los comandos.";
+}
+void mostrarMensajeRed(const string& mensaje) {
+
+    if (procesandoComandoTerminal) {
+
+        // Eliminar el prompt vacío que Readline acaba de dibujar.
+        cout << "\r\033[2K";
+
+        // Mostrar la respuesta del comando.
+        cout << mensaje << '\n' << flush;
+
+        // Volver a dibujar el prompt.
+        rl_on_new_line();
+        rl_redisplay();
+
+    } else {
+
+        // Mensaje asíncrono: conservar lo que el usuario está escribiendo.
+        rl_crlf();
+
+        cout << mensaje << '\n' << flush;
+
+        rl_on_new_line();
+        rl_redisplay();
     }
 }
 
@@ -420,6 +828,30 @@ int main() {
         return 1;
     }
 
+    int servidor = crearServidor(5050, logger);
+
+    if (servidor == -1) {
+        close(epoll_fd);
+        return 1;
+    }
+
+    struct epoll_event eventoServidor {};
+
+    eventoServidor.events = EPOLLIN;
+    eventoServidor.data.fd = servidor;
+
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, servidor, &eventoServidor) == -1) {
+
+        logger->error("Error registrando servidor: {}", strerror(errno));
+
+        close(servidor);
+        close(epoll_fd);
+
+        return 1;
+    }
+
+    cout << "Servidor TCP iniciado en puerto 5050" << endl;
+
     // Registrar stdin y el self-pipe
     struct epoll_event evento {};
 
@@ -447,18 +879,18 @@ int main() {
 
     cout << "JUAN iniciado. PID: " << getpid() << endl;
 
-    cout << "JUAN> " << flush;
+    // Inicializar Readline en modo callback.
+    rl_callback_handler_install("JUAN> ", recibirLinea);
 
-    char buffer[1024];
-    string entrada;
     string linea;
 
-    struct epoll_event eventos[10];
+    constexpr int MAX_EVENTOS_EPOLL = 64;
+    struct epoll_event eventos[MAX_EVENTOS_EPOLL];
 
     while (ejecutando) {
 
         // Esperar eventos usando el timeout de las cancelaciones.
-        int resultado = epoll_wait(epoll_fd, eventos, 10, calcularTimeout());
+        int resultado = epoll_wait(epoll_fd, eventos, MAX_EVENTOS_EPOLL, calcularTimeout());
 
         if (resultado == -1) {
             if (errno == EINTR) {
@@ -476,6 +908,225 @@ int main() {
             int fd = eventos[i].data.fd;
             uint32_t flags = eventos[i].events;
 
+            // NUEVAS CONEXIONES TCP
+            if (fd == servidor && (flags & EPOLLIN)) {
+
+                while (true) {
+
+                    sockaddr_in direccionCliente{};
+                    socklen_t longitud = sizeof(direccionCliente);
+
+                    int cliente = accept4(servidor, reinterpret_cast<sockaddr*>(&direccionCliente),
+                                          &longitud, SOCK_NONBLOCK | SOCK_CLOEXEC);
+
+                    if (cliente == -1) {
+
+                        if (errno == EAGAIN || errno == EWOULDBLOCK)
+                            break;
+
+                        if (errno == EINTR)
+                            continue;
+
+                        logger->error("Error aceptando cliente: {}", strerror(errno));
+
+                        break;
+                    }
+
+                    // Registrar nuevo cliente en epoll
+                    epoll_event eventoCliente{};
+
+                    eventoCliente.events = EPOLLIN | EPOLLRDHUP | EPOLLOUT;
+                    eventoCliente.data.fd = cliente;
+
+                    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cliente, &eventoCliente) == -1) {
+
+                        close(cliente);
+                        continue;
+                    }
+
+                    clientes.emplace(cliente, ClienteTCP{});
+
+                    char ip[INET_ADDRSTRLEN];
+
+                    inet_ntop(AF_INET, &direccionCliente.sin_addr, ip, sizeof(ip));
+
+                    mostrarMensajeRed("[RED] Cliente conectado: " + string(ip));
+
+                    clientes[cliente].salida = "Conectado al servidor JUAN.\nJUAN-RED> ";
+                    logger->info("cliente conectado con ip {}", ip);
+                }
+            }
+
+            // RECEPCION DE DATOS TCP
+            auto clienteIt = clientes.find(fd);
+
+            if (clienteIt != clientes.end()) {
+
+                bool desconectar = false;
+
+                if (flags & (EPOLLERR | EPOLLHUP)) {
+                    desconectar = true;
+                }
+
+                // Leer datos disponibles
+                if (!desconectar && (flags & (EPOLLIN | EPOLLRDHUP))) {
+
+                    char bufferRed[1024];
+
+                    while (true) {
+
+                        ssize_t bytes = recv(fd, bufferRed, sizeof(bufferRed), 0);
+
+                        if (bytes > 0) {
+
+                            clienteIt->second.entrada.append(bufferRed, bytes);
+
+                            if (clienteIt->second.entrada.size() > 8192) {
+                                desconectar = true;
+                                break;
+                            }
+
+                            continue;
+                        }
+
+                        if (bytes == 0) {
+                            clienteIt->second.cerrarDespuesDeEnviar = true;
+                            break;
+                        }
+
+                        if (errno == EINTR)
+                            continue;
+
+                        if (errno == EAGAIN || errno == EWOULDBLOCK)
+                            break;
+
+                        desconectar = true;
+                        break;
+                    }
+                }
+
+                // Procesar comandos completos
+                if (!desconectar) {
+
+                    auto& entrada = clienteIt->second.entrada;
+
+                    size_t posicion;
+
+                    while ((posicion = entrada.find('\n')) != string::npos) {
+
+                        string comando = entrada.substr(0, posicion);
+
+                        entrada.erase(0, posicion + 1);
+
+                        if (!comando.empty() && comando.back() == '\r')
+                            comando.pop_back();
+
+                        if (comando.empty())
+                            continue;
+
+                        mostrarMensajeRed("[RED] " + comando);
+                        sockaddr_in direccion{};
+                        socklen_t longitud = sizeof(direccion);
+
+                        if (getpeername(fd, reinterpret_cast<sockaddr*>(&direccion), &longitud) ==
+                            0) {
+                            char ip[INET_ADDRSTRLEN]{};
+                            inet_ntop(AF_INET, &direccion.sin_addr, ip, sizeof(ip));
+
+                            logger->info("Se recibió comando '{}' desde IP {}", comando, ip);
+                        }
+
+                        string respuesta = procesarComandoRed(comando, dbCOnn, logger);
+
+                        clienteIt->second.salida += respuesta;
+
+                        if (comando == "salir" || comando == "exit") {
+
+                            clienteIt->second.cerrarDespuesDeEnviar = true;
+
+                        } else {
+
+                            clienteIt->second.salida += "\nJUAN-RED> ";
+                        }
+                    }
+                }
+
+                // ENVIO DE RESPUESTAS TCP
+                if (!desconectar && (flags & EPOLLOUT)) {
+
+                    auto& salida = clienteIt->second.salida;
+
+                    while (!salida.empty()) {
+
+                        ssize_t enviados = send(fd, salida.data(), salida.size(), MSG_NOSIGNAL);
+
+                        if (enviados > 0) {
+
+                            salida.erase(0, static_cast<size_t>(enviados));
+                            continue;
+                        }
+
+                        if (enviados == -1 && errno == EINTR) {
+                            continue;
+                        }
+
+                        if (enviados == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                            break;
+                        }
+
+                        desconectar = true;
+                        break;
+                    }
+                }
+
+                // CERRAR CLIENTE SI ES NECESARIO
+                if (desconectar ||
+                    (clienteIt->second.cerrarDespuesDeEnviar && clienteIt->second.salida.empty())) {
+
+                    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+
+                    close(fd);
+                    clientes.erase(clienteIt);
+
+                    continue;
+                }
+
+                // ACTUALIZAR EVENTOS DE EPOLL
+                epoll_event eventoCliente{};
+
+                eventoCliente.events = EPOLLIN | EPOLLRDHUP;
+
+                // Activar escritura solamente cuando hay datos pendientes.
+                if (!clienteIt->second.salida.empty()) {
+                    eventoCliente.events |= EPOLLOUT;
+                }
+
+                eventoCliente.data.fd = fd;
+
+                if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &eventoCliente) == -1) {
+
+                    logger->error("Error actualizando eventos del cliente: {}", strerror(errno));
+
+                    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+
+                    close(fd);
+                    clientes.erase(clienteIt);
+
+                    continue;
+                }
+
+                if (desconectar ||
+                    (clienteIt->second.cerrarDespuesDeEnviar && clienteIt->second.salida.empty())) {
+
+                    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+
+                    close(fd);
+                    clientes.erase(clienteIt);
+
+                    continue;
+                }
+            }
+
             // Evento 1: terminó o cambió el estado de un job.
             if (fd == sigchld_pipe[0] && (flags & (EPOLLIN | EPOLLERR | EPOLLHUP))) {
 
@@ -491,275 +1142,339 @@ int main() {
 
             // Evento 2: hay entrada en la terminal.
             if (fd == STDIN_FILENO && (flags & (EPOLLIN | EPOLLHUP | EPOLLERR))) {
-                ssize_t r = read(STDIN_FILENO, buffer, sizeof(buffer) - 1);
 
-                if (r > 0) {
-                    buffer[r] = '\0';
-                    entrada += buffer;
+                // Readline procesa los caracteres disponibles.
+                rl_callback_read_char();
 
-                    size_t posicion;
+                // Procesar las líneas completas recibidas.
+                // Procesar las líneas completas recibidas.
+                procesandoComandoTerminal = true;
 
-                    while ((posicion = entrada.find('\n')) != string::npos) {
-                        linea = entrada.substr(0, posicion);
-                        entrada.erase(0, posicion + 1);
+                while (!comandosTerminal.empty()) {
 
-                        logger->info("Got commandline: \"{}\"", linea);
+                    linea = comandosTerminal.front();
+                    comandosTerminal.pop();
 
-                        if (linea == "salir" || linea == "exit") {
-                            cout << "\nCerrando JUAN..." << endl;
+                    logger->info("Got commandline: \"{}\"", linea);
 
-                            ejecutando = false;
-                            break;
-                        }
+                    if (linea == "salir" || linea == "exit") {
+                        mostrarMensajeRed("Cerrando JUAN...");
+                        ejecutando = false;
+                        break;
+                    }
 
-                        else if (linea == "ayuda" || linea == "help") {
+                    else if (linea == "ayuda" || linea == "help") {
 
-                            cout << "Comandos disponibles:" << endl;
+                        string ayuda = "Comandos disponibles:\n"
+                                       "  ayuda          - Mostrar ayuda\n"
+                                       "  status         - Mostrar estados\n"
+                                       "  correr         - Ejecutar comando Linux\n"
+                                       "  cancelar <id>  - Cancelar un proceso en ejecucion\n"
+                                       "  corriendo      - Mostrar todos los procesos activos\n"
+                                       "  cola           - Mostrar todos los procesos en la cola\n"
+                                       "  jobs           - Mostrar todos los procesos\n"
+                                       "  salir          - Cerrar JUAN";
 
-                            cout << "  ayuda          - Mostrar ayuda" << endl;
+                        mostrarMensajeRed(ayuda);
+                    }
 
-                            cout << "  status         - Mostrar estados" << endl;
+                    else if (linea == "status") {
+                        actualizarJobs(logger);
 
-                            cout << "  correr         - Ejecutar comando Linux" << endl;
+                        string respuesta;
+                        respuesta += "JUAN funcionando...\n";
+                        respuesta += "Clientes conectados: " + to_string(clientes.size()) + "\n";
+                        respuesta += "Jobs activos: " + to_string(RuningJobs.size()) + "/" +
+                                     to_string(MAX_JOBS) + "\n";
+                        respuesta += "Jobs en cola: " + to_string(trabajosEnCola.size()) + "/" +
+                                     to_string(MAX_COLA);
 
-                            cout << "  cancelar <id>  - cancela un proceso en ejecucion" << endl;
+                        mostrarMensajeRed(respuesta);
+                    } else if (linea.rfind("cancelar ", 0) == 0) {
 
-                            cout << "  corriendo      - Mostrar todos los procesos activos" << endl;
+                        string idTexto = linea.substr(9);
 
-                            cout << "  cola           - Mostrar todos los procesos en la cola"
-                                 << endl;
+                        if (idTexto.empty()) {
 
-                            cout << "  jobs           - Mostrar todos los procesos" << endl;
+                            mostrarMensajeRed("Debes indicar el ID del job.");
 
-                            cout << "  salir          - Cerrar JUAN" << endl;
-                        }
+                        } else {
 
-                        else if (linea == "status") {
+                            try {
 
-                            actualizarJobs(logger);
+                                JobID id = stoll(idTexto);
 
-                            cout << "JUAN funcionando..." << endl;
+                                if (cancelarEnCola(id, dbCOnn, logger)) {
 
-                            cout << "Jobs activos: " << RuningJobs.size() << "/" << MAX_JOBS
-                                 << endl;
-                            cout << "Jobs en cola: " << trabajosEnCola.size() << "/" << MAX_COLA
-                                 << endl;
-                        } else if (linea.rfind("cancelar ", 0) == 0) {
+                                    mostrarMensajeRed("Job " + to_string(id) +
+                                                      " cancelado y eliminado de la cola.");
 
-                            string idTexto = linea.substr(9);
+                                } else {
 
-                            if (idTexto.empty()) {
+                                    auto it = mapaIdPid.find(id);
 
-                                cout << "Debes indicar el ID del job." << endl;
-                            }
+                                    if (it == mapaIdPid.end()) {
 
-                            else {
+                                        mostrarMensajeRed("No existe un job con ID " +
+                                                          to_string(id) + ".");
 
-                                try {
-
-                                    JobID id = stoll(idTexto);
-                                    if (cancelarEnCola(id, dbCOnn, logger)) {
-                                        cout << "Job " << id << " cancelado y eliminado de la cola."
-                                             << endl;
                                     } else {
 
-                                        auto it = mapaIdPid.find(id);
+                                        pid_t pid = it->second;
 
-                                        if (it == mapaIdPid.end()) {
+                                        // Buscar el Job
+                                        bool yaCancelando = false;
 
-                                            cout << "No existe un job con ID " << id << "." << endl;
-                                        }
+                                        for (auto& job : RuningJobs) {
 
-                                        else {
+                                            if (job.id == id) {
 
-                                            pid_t pid = it->second;
-
-                                            // Buscar el Job
-                                            bool yaCancelando = false;
-
-                                            for (auto& job : RuningJobs) {
-                                                if (job.id == id) {
-                                                    if (job.status == CANCELING) {
-                                                        yaCancelando = true;
-                                                    } else {
-                                                        job.status = CANCELING;
-                                                    }
-                                                    break;
+                                                if (job.status == CANCELING) {
+                                                    yaCancelando = true;
+                                                } else {
+                                                    job.status = CANCELING;
                                                 }
-                                            }
 
-                                            if (yaCancelando) {
-                                                cout << "El job " << id
-                                                     << " ya tiene una cancelacion pendiente."
-                                                     << endl;
-                                            } else if (kill(pid, SIGTERM) == 0) {
-                                                plazosCancelacion[id] =
-                                                    Reloj::now() + std::chrono::milliseconds(
-                                                                       TIMEOUT_CANCELACION_MS);
-
-                                                cout << "Cancelacion solicitada para job " << id
-                                                     << ". Timeout: 5000 ms." << endl;
-                                            } else {
-                                                logger->error("Error al enviar SIGTERM: {}",
-                                                              strerror(errno));
+                                                break;
                                             }
                                         }
-                                    }
-                                } catch (...) {
 
-                                    cout << "ID invalido." << endl;
-                                }
-                            }
-                        } else if (linea == "corriendo") {
-                            actualizarJobs(logger);
+                                        if (yaCancelando) {
 
-                            if (RuningJobs.empty()) {
+                                            mostrarMensajeRed(
+                                                "El job " + to_string(id) +
+                                                " ya tiene una cancelacion pendiente.");
 
-                                cout << "No hay jobs ejecutandose." << endl;
+                                        } else if (kill(pid, SIGTERM) == 0) {
 
-                            } else {
+                                            plazosCancelacion[id] =
+                                                Reloj::now() +
+                                                std::chrono::milliseconds(TIMEOUT_CANCELACION_MS);
 
-                                cout << "\nJobs activos:" << endl;
+                                            mostrarMensajeRed("Cancelacion solicitada para job " +
+                                                              to_string(id) +
+                                                              ". Timeout: 5000 ms.");
 
-                                for (const auto& job : RuningJobs) {
+                                        } else {
 
-                                    cout << "ID: " << job.id << " | "
-                                         << "PID: " << mapaIdPid[job.id] << " | "
-                                         << "Comando: " << job.command << " | "
-                                         << "Estado: " << Jobs_tatus_str(job.status) << endl;
-                                }
-                            }
-                        } else if (linea == "cola") {
-                            actualizarJobs(logger);
-                            if (trabajosEnCola.empty()) {
-                                cout << "No hay Jobs en cola" << endl;
-                            } else {
-                                cout << "\nJobs en cola:" << endl;
-                                auto auxiliar = trabajosEnCola;
+                                            logger->error("Error al enviar SIGTERM: {}",
+                                                          strerror(errno));
 
-                                while (!auxiliar.empty()) {
-                                    const auto& job = auxiliar.front();
-
-                                    cout << "ID: " << job.id << " | " << "PID: -- | "
-                                         << "Comando: " << job.command << " | "
-                                         << "Estado: " << Jobs_tatus_str(job.status) << endl;
-
-                                    auxiliar.pop();
-                                }
-                            }
-                        }
-
-                        else if (linea == "jobs") {
-
-                            actualizarJobs(logger);
-
-                            if (RuningJobs.empty()) {
-
-                                cout << "No hay jobs ejecutandose." << endl;
-
-                            } else {
-
-                                cout << "\nJobs activos:" << endl;
-
-                                for (const auto& job : RuningJobs) {
-
-                                    cout << "ID: " << job.id << " | "
-                                         << "PID: " << mapaIdPid[job.id] << " | "
-                                         << "Comando: " << job.command << " | "
-                                         << "Estado: " << Jobs_tatus_str(job.status) << endl;
-                                }
-                                if (trabajosEnCola.empty()) {
-                                    cout << "No hay Jobs en cola" << endl;
-                                } else {
-                                    cout << "\nJobs en cola:" << endl;
-                                    auto auxiliar = trabajosEnCola;
-
-                                    while (!auxiliar.empty()) {
-                                        const auto& job = auxiliar.front();
-
-                                        cout << "ID: " << job.id << " | " << "PID: -- | "
-                                             << "Comando: " << job.command << " | "
-                                             << "Estado: " << Jobs_tatus_str(job.status) << endl;
-
-                                        auxiliar.pop();
+                                            mostrarMensajeRed(
+                                                "Error al solicitar la cancelacion del job " +
+                                                to_string(id) + ".");
+                                        }
                                     }
                                 }
+
+                            } catch (const exception& e) {
+
+                                mostrarMensajeRed("ID invalido.");
+                            }
+                        }
+                    } else if (linea == "corriendo") {
+
+                        actualizarJobs(logger);
+
+                        if (RuningJobs.empty()) {
+
+                            mostrarMensajeRed("No hay jobs ejecutandose.");
+
+                        } else {
+
+                            string mensaje = "Jobs activos:\n";
+
+                            for (const auto& job : RuningJobs) {
+
+                                auto it = mapaIdPid.find(job.id);
+
+                                pid_t pid = (it != mapaIdPid.end()) ? it->second : -1;
+
+                                mensaje +=
+                                    "ID: " + to_string(job.id) + " | PID: " + to_string(pid) +
+                                    " | Comando: " + job.command +
+                                    " | Estado: " + string(Jobs_tatus_str(job.status)) + "\n";
+                            }
+
+                            mostrarMensajeRed(mensaje);
+                        }
+                    } else if (linea == "cola") {
+
+                        actualizarJobs(logger);
+
+                        if (trabajosEnCola.empty()) {
+
+                            mostrarMensajeRed("No hay Jobs en cola.");
+
+                        } else {
+
+                            string mensaje = "Jobs en cola:\n";
+
+                            auto auxiliar = trabajosEnCola;
+
+                            while (!auxiliar.empty()) {
+
+                                const auto& job = auxiliar.front();
+
+                                mensaje += "ID: " + to_string(job.id) + " | PID: --" +
+                                           " | Comando: " + job.command +
+                                           " | Estado: " + string(Jobs_tatus_str(job.status)) +
+                                           "\n";
+
+                                auxiliar.pop();
+                            }
+
+                            mostrarMensajeRed(mensaje);
+                        }
+                    }
+
+                    else if (linea == "jobs") {
+
+                        actualizarJobs(logger);
+
+                        string mensaje;
+
+                        // ==========================================
+                        // JOBS ACTIVOS
+                        // ==========================================
+
+                        if (RuningJobs.empty()) {
+
+                            mensaje += "No hay jobs ejecutandose.\n";
+
+                        } else {
+
+                            mensaje += "Jobs activos:\n";
+
+                            for (const auto& job : RuningJobs) {
+
+                                auto it = mapaIdPid.find(job.id);
+
+                                pid_t pid = (it != mapaIdPid.end()) ? it->second : -1;
+
+                                mensaje +=
+                                    "ID: " + to_string(job.id) + " | PID: " + to_string(pid) +
+                                    " | Comando: " + job.command +
+                                    " | Estado: " + string(Jobs_tatus_str(job.status)) + "\n";
                             }
                         }
 
-                        else if (linea.rfind("correr ", 0) == 0) {
-                            string comando = linea.substr(7);
+                        // ==========================================
+                        // JOBS EN COLA
+                        // ==========================================
 
-                            if (comando.empty()) {
-                                cout << "Debes escribir un comando." << endl;
-                            }
+                        if (trabajosEnCola.empty()) {
 
-                            // Primero comprobar si hay espacio para ejecutar inmediatamente.
-                            else if (RuningJobs.size() < MAX_JOBS) {
-                                JobID id = get_id(comando, LAUNCHED);
+                            mensaje += "\nNo hay Jobs en cola.\n";
 
-                                if (id == -1) {
-                                    cout << "No se pudo registrar el job en SQLite." << endl;
-                                } else {
-                                    Job nuevoJob;
-                                    nuevoJob.id = id;
-                                    nuevoJob.command = comando;
-                                    nuevoJob.status = LAUNCHED;
+                        } else {
 
-                                    correr(nuevoJob, logger);
-                                }
-                            }
+                            mensaje += "\nJobs en cola:\n";
 
-                            // Si no hay espacio activo, comprobar si puede entrar en cola.
-                            else if (trabajosEnCola.size() < MAX_COLA) {
-                                JobID id = get_id(comando, QUEUED);
+                            auto auxiliar = trabajosEnCola;
 
-                                if (id == -1) {
-                                    cout << "No se pudo registrar el job en SQLite." << endl;
-                                } else {
-                                    Job nuevoJob;
-                                    nuevoJob.id = id;
-                                    nuevoJob.command = comando;
-                                    nuevoJob.status = QUEUED;
+                            while (!auxiliar.empty()) {
 
-                                    trabajosEnCola.push(nuevoJob);
+                                const auto& job = auxiliar.front();
 
-                                    cout << "Job creado en cola." << endl;
-                                    cout << "Job ID: " << id << endl;
-                                    cout << "Posicion en cola: " << trabajosEnCola.size() << "/"
-                                         << MAX_COLA << endl;
-                                }
-                            }
+                                mensaje += "ID: " + to_string(job.id) + " | PID: --" +
+                                           " | Comando: " + job.command +
+                                           " | Estado: " + string(Jobs_tatus_str(job.status)) +
+                                           "\n";
 
-                            else {
-                                cout << "Limite de trabajos alcanzado." << endl;
-                                cout << "Activos: " << MAX_JOBS << " | Cola: " << MAX_COLA << endl;
+                                auxiliar.pop();
                             }
                         }
 
-                        else if (linea == "correr") {
+                        mostrarMensajeRed(mensaje);
+                    }
 
-                            cout << "Debes escribir un comando " << "despues de 'correr'." << endl;
+                    else if (linea.rfind("correr ", 0) == 0) {
+
+                        string comando = linea.substr(7);
+
+                        if (comando.empty()) {
+
+                            mostrarMensajeRed("Debes escribir un comando.");
+
                         }
 
-                        else if (linea.empty()) {
+                        // Primero comprobar si hay espacio para ejecutar inmediatamente.
+                        else if (RuningJobs.size() < MAX_JOBS) {
+
+                            JobID id = get_id(comando, LAUNCHED);
+
+                            if (id == -1) {
+
+                                mostrarMensajeRed("No se pudo registrar el job en SQLite.");
+
+                            } else {
+
+                                Job nuevoJob;
+                                nuevoJob.id = id;
+                                nuevoJob.command = comando;
+                                nuevoJob.status = LAUNCHED;
+
+                                correr(nuevoJob, logger);
+                            }
+                        }
+
+                        // Si no hay espacio activo, comprobar si puede entrar en cola.
+                        else if (trabajosEnCola.size() < MAX_COLA) {
+
+                            JobID id = get_id(comando, QUEUED);
+
+                            if (id == -1) {
+
+                                mostrarMensajeRed("No se pudo registrar el job en SQLite.");
+
+                            } else {
+
+                                Job nuevoJob;
+                                nuevoJob.id = id;
+                                nuevoJob.command = comando;
+                                nuevoJob.status = QUEUED;
+
+                                trabajosEnCola.push(nuevoJob);
+
+                                string mensaje = "Job creado en cola.\n"
+                                                 "Job ID: " +
+                                                 to_string(id) + "\n" + "Posicion en cola: " +
+                                                 to_string(trabajosEnCola.size()) + "/" +
+                                                 to_string(MAX_COLA);
+
+                                mostrarMensajeRed(mensaje);
+                            }
                         }
 
                         else {
 
-                            cout << "Comando invalido" << endl;
-                        }
+                            string mensaje = "Limite de trabajos alcanzado.\n"
+                                             "Activos: " +
+                                             to_string(MAX_JOBS) +
+                                             " | Cola: " + to_string(MAX_COLA);
 
-                        cout << "JUAN> " << flush;
+                            mostrarMensajeRed(mensaje);
+                        }
                     }
-                } else if (r == 0) {
-                    cout << "\nEntrada estandar cerrada. Cerrando JUAN..." << endl;
+
+                    else if (linea == "correr") {
+
+                        mostrarMensajeRed("Debes escribir un comando despues de 'correr'.");
+                    }
+
+                    else if (linea.empty()) {
+                    }
+
+                    else {
+
+                        mostrarMensajeRed("Comando invalido.");
+                    }
+                }
+                procesandoComandoTerminal = false;
+                if (finEntradaTerminal) {
+                    cout << "\nEntrada estándar cerrada. Cerrando JUAN..." << endl;
                     ejecutando = false;
-                    break;
-                } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    logger->error("error en lectura de epoll");
-                    ejecutando = false;
-                    break;
                 }
             }
         }
@@ -769,6 +1484,7 @@ int main() {
         revisarCancelaciones(logger);
     }
 
+    rl_callback_handler_remove();
     close(epoll_fd);
     close(sigchld_pipe[0]);
     close(sigchld_pipe[1]);
