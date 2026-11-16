@@ -1,7 +1,6 @@
 #include "database.h"
 #include "job.h"
 #include "result.h"
-
 #include <algorithm>
 #include <arpa/inet.h>
 #include <chrono>
@@ -25,10 +24,14 @@
 #include <string>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <types.h>
 #include <unistd.h>
 #include <unordered_map>
+#ifndef P_PIDFD
+#define P_PIDFD 3
+#endif
 
 using namespace juan;
 using namespace std;
@@ -46,12 +49,25 @@ const int TIMEOUT_CANCELACION_MS = 5000;
 queue<Job> trabajosEnCola;
 vector<Job> RuningJobs;
 map<JobID, pid_t> mapaIdPid;
-int sigchld_pipe[2];
 
 queue<string> comandosTerminal;
 bool finEntradaTerminal = false;
 bool procesandoComandoTerminal = false;
+// Relacionar cada job con su pidfd.
+map<JobID, int> mapaIdPidfd;
 
+// Relacionar cada descriptor pidfd con su job.
+unordered_map<int, JobID> mapaFdJob;
+
+// Abrir un descriptor asociado a un proceso.
+int abrirPidfd(pid_t pid) {
+    return static_cast<int>(syscall(SYS_pidfd_open, pid, 0));
+}
+
+// Enviar señales utilizando el descriptor del proceso.
+int enviarSenalPidfd(int pidfd, int senal) {
+    return static_cast<int>(syscall(SYS_pidfd_send_signal, pidfd, senal, nullptr, 0));
+}
 // Readline entrega las líneas completas a esta función.
 void recibirLinea(char* texto) {
     if (texto == nullptr) {
@@ -69,15 +85,6 @@ void recibirLinea(char* texto) {
     free(texto);
 }
 
-void manejarSIGCHLD(int) {
-    int errorAnterior = errno;
-    char byte = 1;
-
-    // Avisar al ciclo principal que cambió el estado de un hijo.
-    (void)write(sigchld_pipe[1], &byte, 1);
-
-    errno = errorAnterior;
-}
 int calcularTimeout() {
     if (plazosCancelacion.empty()) {
         return -1; // Esperar hasta el próximo evento.
@@ -156,12 +163,17 @@ void revisarCancelaciones(auto logger) {
         auto pidIt = mapaIdPid.find(id);
 
         if (pidIt != mapaIdPid.end()) {
-            pid_t pid = pidIt->second;
+            auto pidfdIt = mapaIdPidfd.find(id);
 
-            if (kill(pid, SIGKILL) == 0) {
-                mostrarMensajeRed("[TIMEOUT] Job " + to_string(id) + ": se envio SIGKILL.");
-            } else if (errno != ESRCH) {
-                logger->error("error en kill SIGKILL");
+            if (pidfdIt != mapaIdPidfd.end()) {
+
+                int pidfd = pidfdIt->second;
+
+                if (enviarSenalPidfd(pidfd, SIGKILL) == 0) {
+                    mostrarMensajeRed("[TIMEOUT] Job " + to_string(id) + ": se envio SIGKILL.");
+                } else if (errno != ESRCH) {
+                    logger->error("error en kill SIGKILL");
+                }
             }
         }
 
@@ -214,7 +226,7 @@ bool cancelarEnCola(JobID id, sqlite3* dbConn, auto logger) {
     return true;
 }
 
-void correr(Job nuevoJob, auto logger) {
+void correr(Job nuevoJob, auto logger, int epoll_fd) {
     pid_t child = fork();
 
     if (child == -1) {
@@ -222,23 +234,20 @@ void correr(Job nuevoJob, auto logger) {
         return;
     }
 
-    else if (child == 0) {
+    if (child == 0) {
         string logFileNameOut = "logs/job_output/" + to_string(nuevoJob.id) + ".log";
+
         string logFileNameErr = "logs/job_error/" + to_string(nuevoJob.id) + ".log";
 
-        // Inicializamos el archivo de salida para stdout y stderr
         int salida_out = open(logFileNameOut.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+
         int salida_err = open(logFileNameErr.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
 
         if (salida_out == -1 || salida_err == -1) {
-
-            logger->info("Archivo de logs abierto para job {}", nuevoJob.id);
-
             if (salida_out != -1)
                 close(salida_out);
             if (salida_err != -1)
                 close(salida_err);
-
             _exit(1);
         }
 
@@ -253,93 +262,144 @@ void correr(Job nuevoJob, auto logger) {
         _exit(127);
     }
 
-    else {
+    // Proceso padre: abrir el pidfd.
+    int pidfd = abrirPidfd(child);
 
-        RuningJobs.push_back(nuevoJob);
+    if (pidfd == -1) {
+        logger->error("Error abriendo pidfd para PID {}: {}", child, strerror(errno));
 
-        mapaIdPid[nuevoJob.id] = child;
-
-        logger->info("Job creado. ID: {} | PID: {} | Jobs activos: {}/{}", nuevoJob.id, child,
-                     RuningJobs.size(), MAX_JOBS);
+        // Aquí todavía no existe un pidfd válido.
+        kill(child, SIGKILL);
+        waitpid(child, nullptr, 0);
+        return;
     }
+
+    // Registrar pidfd en epoll.
+    epoll_event eventoPidfd{};
+    eventoPidfd.events = EPOLLIN;
+    eventoPidfd.data.fd = pidfd;
+
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pidfd, &eventoPidfd) == -1) {
+
+        logger->error("Error registrando pidfd en epoll: {}", strerror(errno));
+
+        kill(child, SIGKILL);
+        waitpid(child, nullptr, 0);
+        close(pidfd);
+        return;
+    }
+
+    // Registrar el proceso únicamente después de agregarlo a epoll.
+    RuningJobs.push_back(nuevoJob);
+
+    mapaIdPid[nuevoJob.id] = child;
+    mapaIdPidfd[nuevoJob.id] = pidfd;
+    mapaFdJob[pidfd] = nuevoJob.id;
+
+    logger->info("Job creado. ID: {} | PID: {} | PIDFD: {} | Jobs activos: {}/{}", nuevoJob.id,
+                 child, pidfd, RuningJobs.size(), MAX_JOBS);
 }
+void procesarTerminacionPidfd(int pidfd, auto logger, int epoll_fd) {
 
-void actualizarJobs(auto logger) {
-    vector<Job> trabajosPorIniciar;
+    auto fdIt = mapaFdJob.find(pidfd);
 
-    for (auto it = RuningJobs.begin(); it != RuningJobs.end();) {
-        auto mapaIt = mapaIdPid.find(it->id);
+    if (fdIt == mapaFdJob.end()) {
+        return;
+    }
 
-        if (mapaIt == mapaIdPid.end()) {
-            ++it;
-            continue;
+    JobID id = fdIt->second;
+
+    auto jobIt = find_if(RuningJobs.begin(), RuningJobs.end(),
+                         [id](const Job& job) { return job.id == id; });
+
+    if (jobIt == RuningJobs.end()) {
+        return;
+    }
+
+    // Recuperar el estado del proceso mediante pidfd.
+    siginfo_t info{};
+
+    if (waitid(static_cast<idtype_t>(P_PIDFD), static_cast<id_t>(pidfd), &info,
+               WEXITED | WNOHANG) == -1) {
+
+        if (errno == EINTR) {
+            return;
         }
 
-        pid_t pid = mapaIt->second;
-        int estado = 0;
+        logger->error("Error en waitid para job {}: {}", id, strerror(errno));
 
-        pid_t resultado = waitpid(pid, &estado, WNOHANG);
+        // Recuperación excepcional para evitar dejar un hijo zombie.
+        auto pidIt = mapaIdPid.find(id);
 
-        if (resultado == 0) {
-            // El proceso todavía está ejecutándose.
-            ++it;
-            continue;
+        if (pidIt != mapaIdPid.end()) {
+            waitpid(pidIt->second, nullptr, 0);
         }
 
-        if (resultado == -1) {
-            if (errno == EINTR) {
-                ++it;
-                continue;
-            }
+        jobIt->status = FAILED;
+        jobIt->result = -1;
+    } else if (info.si_pid == 0) {
+        // Todavía no está listo para recolectarse.
+        return;
 
-            // ECHILD significa que ya no podemos esperar por este hijo.
-            // Se registra el error y se retira de las estructuras activas.
-            logger->error("Error en waitpid para job {}: {}", it->id, strerror(errno));
+    } else {
 
-            it->status = FAILED;
-            it->result = -1;
+        pid_t pid = info.si_pid;
+
+        mostrarMensajeRed("[JOB TERMINADO] ID: " + to_string(id) + " | PID: " + to_string(pid) +
+                          " | Comando: " + jobIt->command);
+
+        if (info.si_code == CLD_EXITED) {
+
+            int codigo = info.si_status;
+
+            mostrarMensajeRed("Codigo: " + to_string(codigo));
+
+            jobIt->result = codigo;
+            jobIt->status = (codigo == 0) ? SUCCEDED : FAILED;
+
+        } else if (info.si_code == CLD_KILLED || info.si_code == CLD_DUMPED) {
+
+            int senal = info.si_status;
+
+            mostrarMensajeRed("Terminado por senal: " + to_string(senal));
+
+            jobIt->result = -senal;
+            jobIt->status = (jobIt->status == CANCELING) ? CANCELED : FAILED;
+
         } else {
-            mostrarMensajeRed("[JOB TERMINADO] ID: " + to_string(it->id) +
-                              " | PID: " + to_string(pid) + " | Comando: " + it->command);
 
-            if (WIFEXITED(estado)) {
-                int codigo = WEXITSTATUS(estado);
-
-                mostrarMensajeRed("Codigo: " + to_string(codigo));
-
-                it->result = codigo;
-                it->status = (codigo == 0) ? SUCCEDED : FAILED;
-
-            } else if (WIFSIGNALED(estado)) {
-                int senal = WTERMSIG(estado);
-
-                mostrarMensajeRed("Terminado por senal: " + to_string(senal));
-
-                it->result = -senal;
-                it->status = (it->status == CANCELING) ? CANCELED : FAILED;
-            } else {
-                it->status = FAILED;
-                it->result = -1;
-            }
-        }
-
-        Job terminado = *it;
-
-        mapaIdPid.erase(mapaIt);
-        plazosCancelacion.erase(terminado.id);
-
-        it = RuningJobs.erase(it);
-
-        // Guardamos el siguiente trabajo, pero todavía no lo lanzamos.
-        if (!trabajosEnCola.empty()) {
-            trabajosPorIniciar.push_back(trabajosEnCola.front());
-            trabajosEnCola.pop();
+            jobIt->status = FAILED;
+            jobIt->result = -1;
         }
     }
 
-    // Ya terminó el recorrido del vector. Ahora es seguro hacer push_back.
-    for (const auto& siguiente : trabajosPorIniciar) {
-        correr(siguiente, logger);
+    Job terminado = *jobIt;
+
+    // Retirar el descriptor de epoll.
+    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pidfd, nullptr);
+
+    // Cerrar y eliminar las referencias al pidfd.
+    close(pidfd);
+
+    mapaFdJob.erase(pidfd);
+    mapaIdPidfd.erase(id);
+    mapaIdPid.erase(id);
+    plazosCancelacion.erase(id);
+
+    // Eliminar el job terminado.
+    RuningJobs.erase(jobIt);
+
+    logger->info("Job {} finalizado. Activos: {}/{}", terminado.id, RuningJobs.size(), MAX_JOBS);
+
+    // Iniciar el siguiente trabajo de la cola.
+    if (!trabajosEnCola.empty()) {
+
+        Job siguiente = trabajosEnCola.front();
+        trabajosEnCola.pop();
+
+        siguiente.status = LAUNCHED;
+
+        correr(siguiente, logger, epoll_fd);
     }
 }
 
@@ -369,7 +429,7 @@ JobID registrarJobRed(sqlite3* dbConn, const string& comando, s8 estado) {
     return id;
 }
 
-string procesarComandoRed(const string& comando, sqlite3* dbConn, auto logger) {
+string procesarComandoRed(const string& comando, sqlite3* dbConn, auto logger, int epoll_fd) {
 
     // ==========================================
     // AYUDA
@@ -391,7 +451,6 @@ string procesarComandoRed(const string& comando, sqlite3* dbConn, auto logger) {
     // STATUS
     // ==========================================
     if (comando == "status") {
-        actualizarJobs(logger);
 
         string respuesta;
         respuesta += "JUAN funcionando...\n";
@@ -441,8 +500,6 @@ string procesarComandoRed(const string& comando, sqlite3* dbConn, auto logger) {
                 return "No existe un job con ID " + to_string(id) + ".";
             }
 
-            pid_t pid = it->second;
-
             bool yaCancelando = false;
 
             for (auto& job : RuningJobs) {
@@ -464,7 +521,7 @@ string procesarComandoRed(const string& comando, sqlite3* dbConn, auto logger) {
                 return "El job " + to_string(id) + " ya tiene una cancelacion pendiente.";
             }
 
-            if (kill(pid, SIGTERM) == 0) {
+            if (enviarSenalPidfd(mapaIdPidfd.at(id), SIGTERM) == 0) {
 
                 plazosCancelacion[id] =
                     Reloj::now() + std::chrono::milliseconds(TIMEOUT_CANCELACION_MS);
@@ -486,8 +543,6 @@ string procesarComandoRed(const string& comando, sqlite3* dbConn, auto logger) {
     // CORRIENDO
     // ==========================================
     if (comando == "corriendo") {
-
-        actualizarJobs(logger);
 
         if (RuningJobs.empty()) {
             return "No hay jobs ejecutandose.";
@@ -514,8 +569,6 @@ string procesarComandoRed(const string& comando, sqlite3* dbConn, auto logger) {
     // ==========================================
     if (comando == "cola") {
 
-        actualizarJobs(logger);
-
         if (trabajosEnCola.empty()) {
             return "No hay Jobs en cola.";
         }
@@ -541,8 +594,6 @@ string procesarComandoRed(const string& comando, sqlite3* dbConn, auto logger) {
     // JOBS (ACTIVOS + EN COLA)
     // ==========================================
     if (comando == "jobs") {
-
-        actualizarJobs(logger);
 
         string respuesta;
 
@@ -619,7 +670,7 @@ string procesarComandoRed(const string& comando, sqlite3* dbConn, auto logger) {
             nuevoJob.command = cmd;
             nuevoJob.status = LAUNCHED;
 
-            correr(nuevoJob, logger);
+            correr(nuevoJob, logger, epoll_fd);
 
             return "Job creado.\nID: " + to_string(id);
         }
@@ -801,30 +852,12 @@ int main() {
 
         return -1L;
     };
-    if (pipe2(sigchld_pipe, O_NONBLOCK | O_CLOEXEC) == -1) {
-        logger->error("pipe2");
-        return 1;
-    }
-
-    struct sigaction sa {};
-    sa.sa_handler = manejarSIGCHLD;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_NOCLDSTOP;
-
-    if (sigaction(SIGCHLD, &sa, nullptr) == -1) {
-        logger->error("sigaction");
-        close(sigchld_pipe[0]);
-        close(sigchld_pipe[1]);
-        return 1;
-    }
 
     // Crear instancia de epoll
     int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 
     if (epoll_fd == -1) {
         logger->error("Error al crear epoll: {}", strerror(errno));
-        close(sigchld_pipe[0]);
-        close(sigchld_pipe[1]);
         return 1;
     }
 
@@ -852,7 +885,7 @@ int main() {
 
     cout << "Servidor TCP iniciado en puerto 5050" << endl;
 
-    // Registrar stdin y el self-pipe
+    // Registrar stdin en epoll
     struct epoll_event evento {};
 
     evento.events = EPOLLIN;
@@ -861,19 +894,6 @@ int main() {
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, STDIN_FILENO, &evento) == -1) {
         logger->error("Error registrando stdin: {}", strerror(errno));
         close(epoll_fd);
-        close(sigchld_pipe[0]);
-        close(sigchld_pipe[1]);
-        return 1;
-    }
-
-    evento.events = EPOLLIN;
-    evento.data.fd = sigchld_pipe[0];
-
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sigchld_pipe[0], &evento) == -1) {
-        logger->error("Error registrando self-pipe: {}", strerror(errno));
-        close(epoll_fd);
-        close(sigchld_pipe[0]);
-        close(sigchld_pipe[1]);
         return 1;
     }
 
@@ -1036,7 +1056,7 @@ int main() {
                             logger->info("Se recibió comando '{}' desde IP {}", comando, ip);
                         }
 
-                        string respuesta = procesarComandoRed(comando, dbCOnn, logger);
+                        string respuesta = procesarComandoRed(comando, dbCOnn, logger, epoll_fd);
 
                         clienteIt->second.salida += respuesta;
 
@@ -1127,17 +1147,10 @@ int main() {
                 }
             }
 
-            // Evento 1: terminó o cambió el estado de un job.
-            if (fd == sigchld_pipe[0] && (flags & (EPOLLIN | EPOLLERR | EPOLLHUP))) {
+            // EVENTO: terminó un proceso identificado por pidfd.
+            if (mapaFdJob.count(fd) && (flags & (EPOLLIN | EPOLLHUP | EPOLLERR))) {
 
-                char notificaciones[128];
-
-                // Vaciar todas las notificaciones pendientes.
-                while (read(sigchld_pipe[0], notificaciones, sizeof(notificaciones)) > 0) {
-                }
-
-                // Actualizar los trabajos que terminaron.
-                actualizarJobs(logger);
+                procesarTerminacionPidfd(fd, logger, epoll_fd);
             }
 
             // Evento 2: hay entrada en la terminal.
@@ -1179,7 +1192,6 @@ int main() {
                     }
 
                     else if (linea == "status") {
-                        actualizarJobs(logger);
 
                         string respuesta;
                         respuesta += "JUAN funcionando...\n";
@@ -1220,8 +1232,6 @@ int main() {
 
                                     } else {
 
-                                        pid_t pid = it->second;
-
                                         // Buscar el Job
                                         bool yaCancelando = false;
 
@@ -1245,7 +1255,8 @@ int main() {
                                                 "El job " + to_string(id) +
                                                 " ya tiene una cancelacion pendiente.");
 
-                                        } else if (kill(pid, SIGTERM) == 0) {
+                                        } else if (enviarSenalPidfd(mapaIdPidfd.at(id), SIGTERM) ==
+                                                   0) {
 
                                             plazosCancelacion[id] =
                                                 Reloj::now() +
@@ -1274,8 +1285,6 @@ int main() {
                         }
                     } else if (linea == "corriendo") {
 
-                        actualizarJobs(logger);
-
                         if (RuningJobs.empty()) {
 
                             mostrarMensajeRed("No hay jobs ejecutandose.");
@@ -1299,8 +1308,6 @@ int main() {
                             mostrarMensajeRed(mensaje);
                         }
                     } else if (linea == "cola") {
-
-                        actualizarJobs(logger);
 
                         if (trabajosEnCola.empty()) {
 
@@ -1329,8 +1336,6 @@ int main() {
                     }
 
                     else if (linea == "jobs") {
-
-                        actualizarJobs(logger);
 
                         string mensaje;
 
@@ -1415,7 +1420,7 @@ int main() {
                                 nuevoJob.command = comando;
                                 nuevoJob.status = LAUNCHED;
 
-                                correr(nuevoJob, logger);
+                                correr(nuevoJob, logger, epoll_fd);
                             }
                         }
 
@@ -1486,8 +1491,6 @@ int main() {
 
     rl_callback_handler_remove();
     close(epoll_fd);
-    close(sigchld_pipe[0]);
-    close(sigchld_pipe[1]);
 
     return 0;
 }
