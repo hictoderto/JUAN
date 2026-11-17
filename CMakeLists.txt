@@ -66,6 +66,7 @@ add_executable(juan
     src/logger.cpp
     src/timestamp.cpp
     src/juan_session.cpp
+    src/event_loop.cpp
 )
 
 add_dependencies(juan readline_external)

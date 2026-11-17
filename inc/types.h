@@ -12,6 +12,7 @@
 namespace juan {
 using s8        = std::int8_t;
 using u8        = std::uint8_t;
+using u32 = std::uint32_t;
 using s64       = std::int64_t;
 using timestamp = s64;
 using str       = std::string;

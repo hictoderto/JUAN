@@ -6,25 +6,37 @@
 #include <string_view>
 
 namespace juan {
-enum struct Status { OK = 0, DB_ERROR, DB_STMT_PREP_ERROR, OPEN_LOG_ERROR };
+enum struct Status {
+    OK = 0,
+    DB_ERROR,
+    ALLOC_ERROR,
+    EPOLL_CREATE_ERROR,
+    EPOLL_ADD_ERROR,
+    EPOLL_MOD_ERROR,
+    EPOLL_DEL_ERROR,
+    EVENT_LOOP_ERROR,
+    DB_STMT_PREP_ERROR,
+    OPEN_LOG_ERROR,
+    PARSE_ERROR
+};
 
 std::string_view status_str(const Status& status) noexcept;
 template <typename T> using Result = std::expected<T, Status>;
 
 template <typename T> constexpr opt<T> to_opt(Result<T>&& res) {
-	if (res) {
-		return opt<T>(*std::move(res));
-	} else {
-		return std::nullopt;
-	}
+    if (res) {
+        return opt<T>(*std::move(res));
+    } else {
+        return std::nullopt;
+    }
 }
 
 template <typename T> constexpr opt<T> to_opt(const Result<T>& res) {
-	if (res) {
-		return opt<T>(*res);
-	} else {
-		return std::nullopt;
-	}
+    if (res) {
+        return opt<T>(*res);
+    } else {
+        return std::nullopt;
+    }
 }
 
 } // namespace juan
