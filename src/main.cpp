@@ -1,6 +1,7 @@
 #include "database.h"
 #include "job.h"
 #include "result.h"
+#include "resourcesView.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -616,6 +617,7 @@ int main() {
                         actualizarJobs(dbCOnn, logger);
 
                         cout << "JUAN funcionando..." << endl;
+                        view();
 
                         cout << "Jobs activos: " << RuningJobs.size() << "/" << MAX_JOBS << endl;
                         cout << "Jobs en cola: " << trabajosEnCola.size() << "/" << MAX_COLA
@@ -689,8 +691,9 @@ int main() {
 
                             for (const auto& job : RuningJobs) {
 
-                                cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id]
-                                     << " | " << "Comando: " << job.command << " | "
+                                cout << "ID: " << job.id << " | " << "PID: " << mapaIdPid[job.id] << endl;
+                                view_pid(mapaIdPid[job.id]);
+                                cout << "Comando: " << job.command << " | "
                                      << "Estado: " << Jobs_status_str(job.status) << endl;
                             }
                         }
