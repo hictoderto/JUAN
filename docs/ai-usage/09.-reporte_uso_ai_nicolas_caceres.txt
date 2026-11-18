@@ -1,0 +1,60 @@
+Herramienta utilizada: Copilot SDK en VS Code
+Tipo de resultado: Monitoreo de uso de CPU y memoria del sistema y de procesos
+Responsable: Nicolas Tadeo Caceres Panuco
+
+Objetivo:
+Organizar la consulta y visualizacion de datos de CPU y memoria leidos desde
+/proc. Mostrar el uso general del sistema en el comando status y proporcionar
+una funcion para consultar los recursos de un proceso identificado por PID.
+
+Resultado obtenido:
+Se agregaron las funciones view() y view_pid(pid_t pid) al modulo
+resourcesView. En main.cpp, el comando status llama a view() en vez de
+contener directamente la impresion de los datos. CMakeLists.txt incluye
+src/resourcesView.cpp como parte del ejecutable juan.
+
+Implementacion:
+
+1. Uso de recursos del sistema
+
+read_memory_usage() obtiene la memoria total y disponible de /proc/meminfo y
+calcula la memoria usada y su porcentaje. read_cpu_times() obtiene los
+contadores de CPU agregados de /proc/stat. Como esos contadores son
+acumulativos, view() toma dos muestras separadas por 100 ms y calcula el
+porcentaje mediante calculate_cpu_usage().
+
+view() imprime CPU Usage y Memory Usage. Si una lectura falla o no se puede
+calcular el porcentaje, imprime un mensaje de disponibilidad en vez de acceder
+a un valor fallido.
+
+2. Uso de recursos por proceso
+
+read_process_memory(pid) lee VmRSS y VmSize de /proc/PID/status.
+read_process_cpu_ticks(pid) obtiene los ticks de CPU del proceso desde
+/proc/PID/stat.
+
+view_pid(pid) calcula el porcentaje de memoria residente del proceso respecto
+a la memoria total del sistema. Para CPU compara dos lecturas de los ticks del
+proceso y del sistema, consulta el numero de CPUs en linea y usa
+calculate_process_cpu_usage(). La funcion imprime los resultados o indica el
+error de lectura correspondiente.
+
+3. Integracion con status
+
+El comando status en src/main.cpp ahora llama view() y conserva la impresion
+del numero de trabajos activos y en cola. view_pid(pid) queda disponible para
+ser llamada cuando otra parte del programa tenga el PID del proceso a
+consultar.
+
+Verificacion realizada:
+Se reviso el diff para comprobar que status delega en view() y que las
+funciones estan en el modulo resourcesView. La comprobacion de compilacion no
+quedo confirmada en esta sesion, por lo que se debe ejecutar:
+
+    cmake -S . -B build
+    cmake --build build --target juan -j2
+
+Resultado final:
+La consulta e impresion de recursos del sistema esta encapsulada en view().
+El modulo tambien ofrece view_pid(pid) para mostrar recursos de un proceso,
+sin agregar aun una llamada a esta funcion desde un comando de JUAN.

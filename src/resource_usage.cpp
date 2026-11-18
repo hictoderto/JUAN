@@ -1,4 +1,4 @@
-#include "resourcesView.h"
+#include "resource_usage.h"
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -9,7 +9,7 @@
 
 // CPU/RAM Usage View Functions
 void juan::view() {
-    auto memory_usage = read_memory_usage();
+    auto memory_usage = get_memory_usage();
     if (memory_usage) {
         std::cout << "Memory Usage: " << memory_usage->used_percent << "%" << std::endl;
     } else {
@@ -17,7 +17,7 @@ void juan::view() {
                   << ")" << std::endl;
     }
 
-    auto previous_cpu_times = read_cpu_times();
+    auto previous_cpu_times = get_cpu_times();
     if (!previous_cpu_times) {
         std::cout << "CPU Usage: unavailable (" << previous_cpu_times.error().message()
                   << ")" << std::endl;
@@ -25,7 +25,7 @@ void juan::view() {
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    auto current_cpu_times = read_cpu_times();
+    auto current_cpu_times = get_cpu_times();
     if (!current_cpu_times) {
         std::cout << "CPU Usage: unavailable (" << current_cpu_times.error().message()
                   << ")" << std::endl;
@@ -36,7 +36,7 @@ void juan::view() {
     }
 }
 
-[[nodiscard]] juan::ResourceResult<juan::MemoryUsage> juan::read_memory_usage() {
+[[nodiscard]] juan::ResourceResult<juan::MemoryUsage> juan::get_memory_usage() {
     // Implementación de la función para leer el uso de memoria
    std::ifstream meminfo("/proc/meminfo");
     if (!meminfo.is_open()) {
@@ -84,7 +84,7 @@ void juan::view() {
     };
 }
 
-[[nodiscard]] juan::ResourceResult<juan::CpuTimes> juan::read_cpu_times() {
+[[nodiscard]] juan::ResourceResult<juan::CpuTimes> juan::get_cpu_times() {
     // Implementación de la función para leer los tiempos de CPU
     std::ifstream cpustat("/proc/stat");
     if (!cpustat.is_open()) {
@@ -128,7 +128,7 @@ void juan::view() {
 }
 
 // Lee utime + stime acumulados del proceso (en ticks) desde /proc/PID/stat
-[[nodiscard]] juan::ResourceResult<std::uint64_t> juan::read_process_cpu_ticks(pid_t pid) {
+[[nodiscard]] juan::ResourceResult<std::uint64_t> juan::get_process_cpu_ticks(pid_t pid) {
     std::ifstream stat("/proc/" + std::to_string(pid) + "/stat");
     if (!stat.is_open()) {
         return std::unexpected(std::make_error_code(std::errc::no_such_process));
@@ -163,8 +163,8 @@ void juan::view() {
 }
 
 void juan::view_pid(pid_t pid) {
-    auto process_memory = read_process_memory(pid);
-    auto total_memory = read_memory_usage();
+    auto process_memory = get_process_memory(pid);
+    auto total_memory = get_memory_usage();
     if (!process_memory) {
         std::cout << "Memory Usage: unavailable (" << process_memory.error().message()
                   << ")" << std::endl;
@@ -178,8 +178,8 @@ void juan::view_pid(pid_t pid) {
         std::cout << "Memory Usage: " << memory_percent << "%" << std::endl;
     }
 
-    auto previous_process_ticks = read_process_cpu_ticks(pid);
-    auto previous_system_times = read_cpu_times();
+    auto previous_process_ticks = get_process_cpu_ticks(pid);
+    auto previous_system_times = get_cpu_times();
     if (!previous_process_ticks) {
         std::cout << "CPU Usage: unavailable (" << previous_process_ticks.error().message()
                   << ")" << std::endl;
@@ -193,8 +193,8 @@ void juan::view_pid(pid_t pid) {
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    auto current_process_ticks = read_process_cpu_ticks(pid);
-    auto current_system_times = read_cpu_times();
+    auto current_process_ticks = get_process_cpu_ticks(pid);
+    auto current_system_times = get_cpu_times();
     if (!current_process_ticks) {
         std::cout << "CPU Usage: unavailable (" << current_process_ticks.error().message()
                   << ")" << std::endl;
@@ -222,7 +222,7 @@ void juan::view_pid(pid_t pid) {
 }
 
 // Lee la memoria residente (RSS) y virtual del proceso desde /proc/PID/status
-[[nodiscard]] juan::ResourceResult<juan::ProcessMemoryUsage> juan::read_process_memory(pid_t pid) {
+[[nodiscard]] juan::ResourceResult<juan::ProcessMemoryUsage> juan::get_process_memory(pid_t pid) {
     std::ifstream status("/proc/" + std::to_string(pid) + "/status");
     if (!status.is_open()) {
         return std::unexpected(std::make_error_code(std::errc::no_such_process));

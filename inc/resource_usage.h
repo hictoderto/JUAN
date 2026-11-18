@@ -1,5 +1,5 @@
-#ifndef RESOURCES_VIEW_H
-#define RESOURCES_VIEW_H
+#ifndef RESOURCE_USAGE_H
+#define RESOURCE_USAGE_H
 
 #include <cstdint>
 #include <expected>
@@ -37,11 +37,11 @@ namespace juan {
     void view();
     void view_pid(pid_t pid);
     
-    [[nodiscard]] ResourceResult<MemoryUsage> read_memory_usage();  //Declaracion de la funcion read_memory_usage que devuelve un ResourceResult de tipo MemoryUsage
-    [[nodiscard]] ResourceResult<CpuTimes> read_cpu_times();        //Declaracion de la funcion read_cpu_times que devuelve un ResourceResult de tipo CpuTimes
+    [[nodiscard]] ResourceResult<MemoryUsage> get_memory_usage();  //Declaracion de la funcion read_memory_usage que devuelve un ResourceResult de tipo MemoryUsage
+    [[nodiscard]] ResourceResult<CpuTimes> get_cpu_times();        //Declaracion de la funcion read_cpu_times que devuelve un ResourceResult de tipo CpuTimes
     [[nodiscard]] std::optional<CpuUsage> calculate_cpu_usage(const CpuTimes& previous, const CpuTimes& current) noexcept;  //Declaracion de la funcion calculate_cpu_usage que devuelve un std::optional de tipo CpuUsage y toma dos parametros de tipo CpuTimes
-    [[nodiscard]] ResourceResult<std::uint64_t> read_process_cpu_ticks(pid_t pid);
-    [[nodiscard]] ResourceResult<ProcessMemoryUsage> read_process_memory(pid_t pid);
+    [[nodiscard]] ResourceResult<std::uint64_t> get_process_cpu_ticks(pid_t pid);
+    [[nodiscard]] ResourceResult<ProcessMemoryUsage> get_process_memory(pid_t pid);
     [[nodiscard]] std::optional<CpuUsage> calculate_process_cpu_usage(std::uint64_t previous_process_ticks, std::uint64_t current_process_ticks, 
                                                                         const CpuTimes& previous_system, const CpuTimes& current_system, unsigned cpu_count) noexcept;
 

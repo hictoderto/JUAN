@@ -1,7 +1,7 @@
 #include "database.h"
 #include "job.h"
 #include "result.h"
-#include "resourcesView.h"
+#include "resource_usage.h"
 
 #include <errno.h>
 #include <fcntl.h>
