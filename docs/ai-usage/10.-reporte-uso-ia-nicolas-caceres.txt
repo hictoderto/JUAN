@@ -1,0 +1,58 @@
+Herramienta utilizada: Copilot SDK en VS Code
+Tipo de resultado: Apoyo para comprender funciones y orientar una modificacion
+Responsable: Nicolas Tadeo Caceres Panuco
+
+Objetivo:
+Comprender el funcionamiento de la consulta de CPU y memoria de un proceso,
+asi como obtener una idea de como separar la obtencion de datos de su
+impresion usando ProcessUsage y las funciones existentes.
+
+Alcance del apoyo:
+La herramienta se utilizo unicamente como apoyo para explicar las funciones
+relacionadas y proponer una guia de modificacion. El analisis y las decisiones
+sobre la adaptacion al proyecto corresponden al responsable.
+
+Funciones revisadas e idea de modificacion:
+
+1. Uso de memoria
+
+Se reviso que get_process_memory() obtiene el RSS del proceso y que
+get_memory_usage() proporciona la memoria total del sistema. Con esos datos,
+el porcentaje puede calcularse como:
+
+    100.0 * rss_bytes / total_bytes
+
+La idea propuesta fue conservar los errores de lectura en el resultado
+tipado, en vez de imprimirlos durante la obtencion de datos.
+
+2. Uso de CPU
+
+Se reviso el uso de get_process_cpu_ticks() y get_cpu_times() para tomar las
+muestras del proceso y del sistema. Como idea para evitar duplicar lecturas,
+se sugirio agrupar ambas en una funcion auxiliar y reutilizarla para la muestra
+anterior y la actual.
+
+Se explico que las muestras deben separarse por 100 ms y que
+process_cpu_percent() calcula el porcentaje. Tambien se considero como manejar
+los errores de lectura, el caso en que sysconf() no obtiene un numero valido
+de CPUs y el caso en que el calculo devuelve nullopt.
+
+3. Impresion y compatibilidad
+
+Se propuso separar la presentacion en print_process_usage(), conservando las
+lineas Memory Usage y CPU Usage y sus mensajes de error. Con esta separacion,
+view_pid(pid) puede delegar la obtencion y la impresion:
+
+    print_process_usage(get_process_usage(pid));
+
+Verificacion realizada:
+Se reviso la propuesta de separacion entre lectura e impresion. La compilacion
+no quedo confirmada en esta sesion; para verificar la integracion se puede
+ejecutar:
+
+    cmake --build build --target juan -j2
+
+Resultado final:
+La asistencia sirvio como referencia para comprender las funciones de uso de
+recursos y contar con una idea de como modificarlas. La revision y
+responsabilidad sobre los cambios del proyecto corresponden al responsable.
