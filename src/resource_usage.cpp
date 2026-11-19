@@ -7,6 +7,29 @@
 #include <thread>
 #include <unistd.h>
 
+namespace {
+
+struct ProcessCpuSample {
+    std::uint64_t process_ticks;
+    juan::CpuTimes system_times;
+};
+
+juan::ResourceResult<ProcessCpuSample> get_process_cpu_sample(pid_t pid) {
+    auto process_ticks = juan::get_process_cpu_ticks(pid);
+    if (!process_ticks) {
+        return std::unexpected(process_ticks.error());
+    }
+
+    auto system_times = juan::get_cpu_times();
+    if (!system_times) {
+        return std::unexpected(system_times.error());
+    }
+
+    return ProcessCpuSample{*process_ticks, *system_times};
+}
+
+} // namespace
+
 // CPU/RAM Usage View Functions
 void juan::view() {
     auto memory_usage = get_memory_usage();
@@ -29,7 +52,7 @@ void juan::view() {
     if (!current_cpu_times) {
         std::cout << "CPU Usage: unavailable (" << current_cpu_times.error().message()
                   << ")" << std::endl;
-    } else if (auto cpu_usage = calculate_cpu_usage(*previous_cpu_times, *current_cpu_times)) {
+    } else if (auto cpu_usage = system_cpu_percent(*previous_cpu_times, *current_cpu_times)) {
         std::cout << "CPU Usage: " << cpu_usage->percent << "%" << std::endl;
     } else {
         std::cout << "CPU Usage: unavailable (could not calculate sample)" << std::endl;
@@ -112,7 +135,7 @@ void juan::view() {
     return CpuTimes{total, idle};
 }
 
-[[nodiscard]] std::optional<juan::CpuUsage> juan::calculate_cpu_usage(const juan::CpuTimes& previous, const juan::CpuTimes& current) noexcept {
+[[nodiscard]] std::optional<juan::CpuUsage> juan::system_cpu_percent(const juan::CpuTimes& previous, const juan::CpuTimes& current) noexcept {
     // Implementación de la función para calcular el uso de CPU basado en los tiempos anteriores y actuales
     if (current.total_ticks <= previous.total_ticks || current.idle_ticks < previous.idle_ticks) {
         return std::nullopt; // No se puede calcular el uso si los ticks actuales son menores o iguales a los anteriores
@@ -162,64 +185,71 @@ void juan::view() {
     return utime + stime;
 }
 
-void juan::view_pid(pid_t pid) {
-    auto process_memory = get_process_memory(pid);
-    auto total_memory = get_memory_usage();
-    if (!process_memory) {
-        std::cout << "Memory Usage: unavailable (" << process_memory.error().message()
-                  << ")" << std::endl;
-    } else if (!total_memory) {
-        std::cout << "Memory Usage: unavailable (" << total_memory.error().message()
-                  << ")" << std::endl;
+juan::ProcessUsage juan::get_process_usage(pid_t pid) {
+    auto memory_percent = [&]() -> ResourceResult<double> {
+        auto process_memory = get_process_memory(pid);
+        if (!process_memory) {
+            return std::unexpected(process_memory.error());
+        }
+
+        auto total_memory = get_memory_usage();
+        if (!total_memory) {
+            return std::unexpected(total_memory.error());
+        }
+
+        return 100.0 * static_cast<double>(process_memory->rss_bytes) /
+               static_cast<double>(total_memory->total_bytes);
+    }();
+
+    auto cpu_percent = [&]() -> ResourceResult<double> {
+        auto previous_sample = get_process_cpu_sample(pid);
+        if (!previous_sample) {
+            return std::unexpected(previous_sample.error());
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        auto current_sample = get_process_cpu_sample(pid);
+        if (!current_sample) {
+            return std::unexpected(current_sample.error());
+        }
+
+        const long cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+        if (cpu_count <= 0) {
+            return std::unexpected(std::make_error_code(std::errc::not_supported));
+        }
+
+        auto cpu_usage = process_cpu_percent(
+            previous_sample->process_ticks, current_sample->process_ticks,
+            previous_sample->system_times, current_sample->system_times,
+            static_cast<unsigned>(cpu_count));
+        if (!cpu_usage) {
+            return std::unexpected(std::make_error_code(std::errc::bad_message));
+        }
+
+        return cpu_usage->percent;
+    }();
+
+    return ProcessUsage{memory_percent, cpu_percent};
+}
+
+void juan::print_process_usage(const ProcessUsage& usage) {
+    if (usage.memory_usage_percent) {
+        std::cout << "Memory Usage: " << *usage.memory_usage_percent << "%" << std::endl;
     } else {
-        const double memory_percent =
-            100.0 * static_cast<double>(process_memory->rss_bytes) /
-            static_cast<double>(total_memory->total_bytes);
-        std::cout << "Memory Usage: " << memory_percent << "%" << std::endl;
+        std::cout << "Memory Usage: unavailable ("
+                  << usage.memory_usage_percent.error().message() << ")" << std::endl;
     }
 
-    auto previous_process_ticks = get_process_cpu_ticks(pid);
-    auto previous_system_times = get_cpu_times();
-    if (!previous_process_ticks) {
-        std::cout << "CPU Usage: unavailable (" << previous_process_ticks.error().message()
-                  << ")" << std::endl;
-        return;
-    }
-    if (!previous_system_times) {
-        std::cout << "CPU Usage: unavailable (" << previous_system_times.error().message()
-                  << ")" << std::endl;
-        return;
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    auto current_process_ticks = get_process_cpu_ticks(pid);
-    auto current_system_times = get_cpu_times();
-    if (!current_process_ticks) {
-        std::cout << "CPU Usage: unavailable (" << current_process_ticks.error().message()
-                  << ")" << std::endl;
-        return;
-    }
-    if (!current_system_times) {
-        std::cout << "CPU Usage: unavailable (" << current_system_times.error().message()
-                  << ")" << std::endl;
-        return;
-    }
-
-    const long cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
-    if (cpu_count <= 0) {
-        std::cout << "CPU Usage: unavailable (could not determine CPU count)" << std::endl;
-        return;
-    }
-
-    if (auto cpu_usage = calculate_process_cpu_usage(
-            *previous_process_ticks, *current_process_ticks, *previous_system_times,
-            *current_system_times, static_cast<unsigned>(cpu_count))) {
-        std::cout << "CPU Usage: " << cpu_usage->percent << "%" << std::endl;
+    if (usage.cpu_usage_percent) {
+        std::cout << "CPU Usage: " << *usage.cpu_usage_percent << "%" << std::endl;
     } else {
-        std::cout << "CPU Usage: unavailable (could not calculate sample)" << std::endl;
+        std::cout << "CPU Usage: unavailable ("
+                  << usage.cpu_usage_percent.error().message() << ")" << std::endl;
     }
 }
+
+void juan::view_pid(pid_t pid) { print_process_usage(get_process_usage(pid)); }
 
 // Lee la memoria residente (RSS) y virtual del proceso desde /proc/PID/status
 [[nodiscard]] juan::ResourceResult<juan::ProcessMemoryUsage> juan::get_process_memory(pid_t pid) {
@@ -256,7 +286,7 @@ void juan::view_pid(pid_t pid) {
 }
 
 // Calcula el % de CPU del proceso entre dos lecturas (100% = un core completo)
-[[nodiscard]] std::optional<juan::CpuUsage> juan::calculate_process_cpu_usage(
+[[nodiscard]] std::optional<juan::CpuUsage> juan::process_cpu_percent(
     std::uint64_t previous_process_ticks,
     std::uint64_t current_process_ticks,
     const juan::CpuTimes& previous_system,
@@ -271,7 +301,7 @@ void juan::view_pid(pid_t pid) {
     const std::uint64_t process_diff = current_process_ticks - previous_process_ticks;
     const std::uint64_t total_diff   = current_system.total_ticks - previous_system.total_ticks;
 
-    const double usage_percent =
-        100.0 * static_cast<double>(process_diff) / static_cast<double>(total_diff) * cpu_count;
+    const double usage_percent = 100.0 * static_cast<double>(process_diff) / static_cast<double>(total_diff) * cpu_count;
+    
     return CpuUsage{usage_percent};
 }
